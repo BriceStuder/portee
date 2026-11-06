@@ -356,6 +356,18 @@ $('#themeBtn').onclick = () => {
   save('settings', S);
   applyTheme();
 };
+// Plein écran (API Fullscreen). Masqué si non disponible ou si l'appli installée est déjà en plein écran.
+const fsBtn = $('#fsBtn');
+const fsAvailable = document.fullscreenEnabled && !matchMedia('(display-mode: fullscreen)').matches;
+fsBtn.hidden = !fsAvailable;
+const syncFs = () => document.body.classList.toggle('is-fs', !!document.fullscreenElement);
+fsBtn.onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+};
+document.addEventListener('fullscreenchange', syncFs);
+syncFs();
+
 const openDrawer = open => {
   $('#drawer').classList.toggle('open', open);
   $('#scrim').classList.toggle('open', open);

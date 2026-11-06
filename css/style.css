@@ -94,6 +94,7 @@ main { display: flex; flex-direction: column; align-items: center; justify-conte
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
   background: color-mix(in srgb, var(--paper) 82%, transparent); backdrop-filter: blur(3px);
   text-align: center; padding: 20px; transition: opacity .25s;
+  justify-content: safe center; overflow: auto;
 }
 .overlay.hide { opacity: 0; pointer-events: none }
 .overlay h3 { font-family: Fraunces, serif; font-weight: 600; font-size: 30px; margin: 0 }
@@ -212,7 +213,9 @@ body.no-kb .feedback { font-size: 26px }
   .sheet { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column }
   .sheet-head { display: none }
   .sheet svg { flex: 1 1 0; min-height: 0; height: 100% }
-  .overlay { gap: 6px; padding: 8px; overflow: auto }
+  /* résumé disposé en ligne : score, infos et bouton côte à côte, notes à revoir dessous */
+  .overlay { flex-direction: row; flex-wrap: wrap; align-content: safe center; column-gap: 18px; row-gap: 6px; padding: 8px }
+  .overlay .chips { flex-basis: 100%; order: 5 }
   .overlay h3 { font-size: 22px }
   .overlay .big { font-size: 32px }
   .overlay .big small { font-size: 18px }
@@ -228,3 +231,9 @@ body.no-kb .feedback { font-size: 26px }
   .keys-wrap.simple { max-width: min(760px, calc(45dvh * var(--kb-ratio, 6))) }
   body.no-kb .feedback { font-size: 20px }
 }
+
+/* plein écran */
+#fsBtn .fs-off, body.is-fs #fsBtn .fs-on { display: none }
+body.is-fs #fsBtn .fs-off { display: inline }
+/* encoche / caméra en paysage : on garde le contenu hors de la zone masquée */
+body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right) }
