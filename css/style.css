@@ -195,3 +195,36 @@ main { display: flex; flex-direction: column; align-items: center; justify-conte
 body.no-kb { grid-template-rows: auto 1fr }
 body.no-kb .sheet, body.no-kb .timer { width: min(1000px, 100%) }
 body.no-kb .feedback { font-size: 26px }
+
+/* ---------- écrans bas (téléphone en paysage) ----------
+   Tout tient dans la hauteur de l'écran : le clavier garde sa taille,
+   la portée se contente de la place restante. */
+@media (max-height: 560px) {
+  body { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden }
+  header { padding: 6px 16px; gap: 10px; flex-wrap: nowrap }
+  .brand { font-size: 18px }
+  .brand .glyph { font-size: 24px }
+  .seg button { padding: 4px 12px; font-size: 13px }
+  .icon-btn { width: 32px; height: 32px }
+  .stat .v { font-size: 18px }
+  .stat .l { font-size: 9px }
+  main { min-height: 0; padding: 2px 16px 6px; gap: 6px }
+  .sheet { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column }
+  .sheet-head { display: none }
+  .sheet svg { flex: 1 1 0; min-height: 0; height: 100% }
+  .overlay { gap: 6px; padding: 8px; overflow: auto }
+  .overlay h3 { font-size: 22px }
+  .overlay .big { font-size: 32px }
+  .overlay .big small { font-size: 18px }
+  .overlay .meta { font-size: 12px; gap: 12px }
+  .overlay .hint { display: none }
+  .btn { padding: 7px 18px; font-size: 14px }
+  .feedback { min-height: 20px; font-size: 16px }
+  .feedback .sub { font-size: 12px }
+  .piano { padding-top: 6px }
+  .piano-top { display: none }
+  /* clavier plafonné à ~45 % de la hauteur : on réduit sa largeur plutôt que de le couper */
+  .keys-wrap { max-width: min(1200px, calc(45dvh * var(--kb-ratio, 6))) }
+  .keys-wrap.simple { max-width: min(760px, calc(45dvh * var(--kb-ratio, 6))) }
+  body.no-kb .feedback { font-size: 20px }
+}

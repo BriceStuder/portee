@@ -93,6 +93,7 @@ export class Keyboard {
     svg.setAttribute('viewBox', `0 0 ${wi * kw} ${kh}`);
     // Sur petit écran, le clavier complet défile horizontalement plutôt que d'avoir des touches minuscules.
     svg.style.minWidth = simple ? '' : `${wi * 26}px`;
+    this.wrap.style.setProperty('--kb-ratio', (wi * kw / kh).toFixed(3)); // utilisé pour plafonner la hauteur
     this.wrap.classList.toggle('simple', simple);
     requestAnimationFrame(() => { this.wrap.scrollLeft = (this.wrap.scrollWidth - this.wrap.clientWidth) / 2; });
   }
