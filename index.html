@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Portée</title>
+<meta name="description" content="Entraînement à la lecture de notes, clé de sol et clé de fa, avec clavier et MIDI.">
+<meta name="theme-color" content="#ece6d9">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/NotoMusic-music-4.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="glyph">𝄞</span>Portée</div>
+  <span class="seg" id="clefSeg">
+    <button data-v="treble"><span class="g">𝄞</span>Sol</button>
+    <button data-v="bass"><span class="g">𝄢</span>Fa</button>
+  </span>
+  <div class="spacer"></div>
+  <span class="pill midi hide-sm" id="midiPill" hidden><span class="dot"></span><span class="txt"></span></span>
+  <div class="stat"><span class="v" id="stat1v"></span><span class="l" id="stat1l"></span></div>
+  <div class="stat"><span class="v" id="stat2v"></span><span class="l" id="stat2l"></span></div>
+  <div class="lives" id="lives" title="Vies"></div>
+  <button class="icon-btn" id="themeBtn" title="Thème clair / sombre" aria-label="Thème clair / sombre">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+  </button>
+  <button class="icon-btn" id="gearBtn" title="Réglages" aria-label="Réglages">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+</header>
+
+<main>
+  <div class="sheet">
+    <div class="sheet-head"><span id="headMode"></span><span id="headTags"></span></div>
+    <svg id="staff" aria-label="Portée"></svg>
+    <div class="overlay" id="overlay"></div>
+  </div>
+  <div class="timer" id="timer"><i id="timerBar"></i></div>
+  <div class="feedback" id="feedback" aria-live="polite"></div>
+</main>
+
+<section class="piano">
+  <div class="piano-top"><span class="brandmark">PORTÉE</span><span id="rangeLbl"></span></div>
+  <div class="keys-wrap" id="keysWrap">
+    <div class="felt"></div>
+    <svg class="keys" id="keys" aria-label="Clavier"></svg>
+  </div>
+</section>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Réglages">
+  <h2>Réglages <button class="icon-btn" id="closeBtn" aria-label="Fermer">✕</button></h2>
+  <div id="controls"></div>
+  <div class="row"><div class="lbl">Entrée MIDI</div><div id="midiRow" class="hint-t"></div></div>
+  <div class="row"><div class="lbl">Points faibles <span class="muted" id="statsClef"></span></div><div id="statsList"></div>
+    <button class="link-btn" id="resetStats">Effacer les statistiques</button></div>
+  <div class="row hint-t">Clavier d'ordinateur (mode 1 octave) : rangée du milieu pour les touches blanches, rangée du haut pour les noires. Espace : commencer.</div>
+</aside>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
