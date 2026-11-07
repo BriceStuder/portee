@@ -1,6 +1,6 @@
 // Contrôleur : réglages, déroulement du jeu, liaison interface ↔ clavier ↔ MIDI.
 import { makeNote, fromMidi, noteName, enharmonic, isRare, noteRange, keyboardRange, LETTERS_FR, LETTERS_EN } from './theory.js';
-import { renderStaff } from './staff.js';
+import { renderStaff, renderSequence } from './staff.js';
 import { Keyboard } from './keyboard.js';
 import { playNote, click, audioNow } from './audio.js';
 import { initMidi } from './midi.js';
@@ -17,7 +17,7 @@ const LIVES = 3;
 const OK_DELAY = 450, BAD_DELAY = 1400; // pause (ms) avant la note suivante
 
 const DEFAULTS = {
-  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80, chords: true, wake: true,
+  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80, chords: true, wake: true, scroll: true, rests: true,
   clef: 'treble', mode: 'series', seriesLength: 20, time: 5, kb: 'strict',
   names: true, notation: 'fr', accidentals: true, rare: false, range: 2, sound: true, hideKb: true, theme: null,
 };
@@ -208,7 +208,10 @@ function stopGame() {
 
 // ---------- mode libre : la portée affiche ce qui est joué ----------
 // Les notes jouées ensemble (accord) restent affichées jusqu'à la prochaine attaque après relâchement.
-const FREE = { held: new Set(), shown: [], clef: 'treble', t0: 0, value: null, raf: 0 };
+// En mode « à la suite », chaque accord (et chaque silence) s'ajoute à une petite partition qui défile.
+const FREE = { held: new Set(), shown: [], clef: 'treble', t0: 0, value: null, raf: 0, seq: [], lastOff: 0 };
+const SEQ_MAX = 64;     // éléments gardés en mémoire
+const REST_MIN = 0.3;   // en temps : un silence plus court est un simple lever de doigt (legato imparfait)
 
 // Figures de note, en temps (noires). La durée tenue est arrondie à la figure la plus proche.
 const VALUES = [
@@ -221,7 +224,8 @@ const VALUES = [
   { type: 'h', dot: true, beats: 3, name: 'blanche pointée' },
   { type: 'w', beats: 4, name: 'ronde' },
 ];
-const heldBeats = () => (performance.now() - FREE.t0) / 60000 * S.tempo;
+const toBeats = ms => ms / 60000 * S.tempo;
+const heldBeats = () => toBeats(performance.now() - FREE.t0);
 // Pendant l'appui : la figure grandit au fil du temps (dernière figure atteinte).
 const liveValue = b => VALUES.filter(v => v.beats <= b).pop() || VALUES[0];
 // Au relâchement : figure la plus proche (à l'échelle logarithmique, comme l'oreille).
@@ -230,9 +234,17 @@ const nearestValue = b => VALUES.reduce((a, v) => Math.abs(Math.log2(v.beats / b
 function freeOn(m) {
   const fresh = FREE.held.size === 0;
   if (fresh) {
+    const now = performance.now();
     FREE.shown = [];
-    FREE.t0 = performance.now();
-    FREE.value = S.durations ? VALUES[0] : null;
+    if (S.scroll) {
+      // Silence depuis le dernier relâchement (au plus une pause, même après une longue attente)
+      const gap = FREE.lastOff ? toBeats(now - FREE.lastOff) : 0;
+      if (S.durations && S.rests && FREE.seq.length && gap >= REST_MIN) FREE.seq.push({ rest: true, value: nearestValue(Math.min(gap, 4)) });
+      FREE.seq.push({ midis: FREE.shown, value: null, live: true });
+      if (FREE.seq.length > SEQ_MAX) FREE.seq.splice(0, FREE.seq.length - SEQ_MAX);
+    }
+    FREE.t0 = now;
+    setValue(S.durations ? VALUES[0] : null);
     clearInterval(FREE.raf);
     if (S.durations) FREE.raf = setInterval(growValue, 30);
   }
@@ -241,15 +253,31 @@ function freeOn(m) {
   renderFree(fresh);
 }
 
+function setValue(v) {
+  FREE.value = v;
+  const cur = FREE.seq[FREE.seq.length - 1];
+  if (cur && !cur.rest && cur.live) cur.value = v;
+}
+
 function growValue() {
   const v = liveValue(heldBeats());
-  if (v !== FREE.value) { FREE.value = v; renderFree(false); }
+  if (v !== FREE.value) { setValue(v); renderFree(false); }
 }
 
 function release(m) {
-  if (!FREE.held.delete(m) || FREE.held.size || !free() || !S.durations || !FREE.value) return;
+  if (!FREE.held.delete(m) || FREE.held.size || !free()) return;
   clearInterval(FREE.raf);
-  FREE.value = nearestValue(heldBeats());
+  FREE.lastOff = performance.now();
+  if (S.durations && FREE.value) setValue(nearestValue(heldBeats()));
+  const cur = FREE.seq[FREE.seq.length - 1];
+  if (cur) cur.live = false;
+  renderFree(false);
+}
+
+function clearSeq() {
+  FREE.seq = [];
+  FREE.shown = [];
+  FREE.lastOff = 0;
   renderFree(false);
 }
 
@@ -269,7 +297,21 @@ function renderFree(animate) {
   }
   const value = S.durations ? FREE.value : null;
   const chord = S.chords ? analyse(FREE.shown, S.notation, S.spell) : null;
-  renderStaff(staffSvg, { clef: FREE.clef, notes, value, label: chord?.label, labelKind: chord?.kind, animate });
+  if (S.scroll) {
+    // Noms d'accords courts au-dessus de la partition (une seule notation pour gagner de la place)
+    const nota = S.notation === 'both' ? 'fr' : S.notation;
+    const events = FREE.seq.map(e => e.rest ? e : {
+      notes: e.midis.map(m => fromMidi(m, S.spell)),
+      value: S.durations ? e.value : null,
+      live: e.live,
+      label: S.chords ? (a => a?.kind === 'chord' ? a.label : '')(analyse(e.midis, nota, S.spell)) : '',
+    });
+    // Écran bas (téléphone en paysage) : la portée a une hauteur imposée, on l'allonge pour remplir la largeur.
+    const short = matchMedia('(max-height: 560px)').matches && staffSvg.clientHeight > 0;
+    const width = short ? Math.max(520, Math.round(staffSvg.clientWidth / staffSvg.clientHeight * 210)) : 520;
+    renderSequence(staffSvg, { clef: FREE.clef, events, width });
+  } else renderStaff(staffSvg, { clef: FREE.clef, notes, value, label: chord?.label, labelKind: chord?.kind, animate });
+  $('#clearSeq').hidden = !(S.scroll && FREE.seq.length);
   const sub = [chord?.desc, value?.name].filter(Boolean).join(' · ');
   if (notes.length) setFeedback('', notes.slice().sort((a, b) => a.midi - b.midi).map(n => noteName(n, S.notation)).join(' · '), sub);
   else setFeedback('hint', 'Jouez une note : elle s\'affiche sur la portée');
@@ -324,6 +366,7 @@ function renderMetro() {
 }
 
 function enterFree() {
+  if (!S.scroll) FREE.seq = [];
   clearTimeout(pending);
   stopTimer();
   G = fresh();
@@ -397,6 +440,8 @@ const CONTROLS = [
     hint: s => s.activity === 'free' ? 'La portée affiche simplement les notes jouées' : 'Une note s\'affiche : jouez-la' },
   { key: 'spell', label: 'Touches noires', opts: [['sharp', 'Dièses ♯'], ['flat', 'Bémols ♭']], show: s => !game(s) },
   { key: 'autoClef', label: 'Changer de clé automatiquement', toggle: true, show: s => !game(s) },
+  { key: 'scroll', label: 'Notes à la suite (partition qui défile)', toggle: true, show: s => !game(s) },
+  { key: 'rests', label: 'Silences entre les notes', toggle: true, show: s => !game(s) && s.scroll && s.durations },
   { key: 'chords', label: 'Nommer les accords et les intervalles', toggle: true, show: s => !game(s) },
   { key: 'durations', label: 'Durée des notes (ronde, blanche, noire…)', toggle: true, show: s => !game(s),
     hint: s => s.durations ? 'Tempo et métronome : boutons « − ♩ = 80 + » en haut' : '' },
@@ -526,6 +571,10 @@ $('#clefSeg').addEventListener('click', e => {
   if (b.dataset.v !== S.clef) set('clef', b.dataset.v);
   else if (free() && FREE.clef !== S.clef) enterFree();
 });
+$('#clearSeq').onclick = clearSeq;
+// Rotation du téléphone : la partition se recalcule à la nouvelle largeur.
+let resizeT = 0;
+window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (free() && S.scroll) renderFree(false); }, 150); });
 $('#metroBtn').onclick = () => (METRO.on ? metroStop : metroStart)();
 // Tempo : − / + de 1 en 1. En maintenant appuyé, ça défile, puis passe de 5 en 5 après un moment.
 const TEMPO_MIN = 30, TEMPO_MAX = 240;
