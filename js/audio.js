@@ -42,3 +42,22 @@ export function playNote(midi) {
     o.stop(t + dur + 0.05);
   }
 }
+
+export function audioNow() {
+  init();
+  if (ctx.state === 'suspended') ctx.resume();
+  return ctx.currentTime;
+}
+
+/** Clic de métronome (plus aigu sur le premier temps), joué à l'instant « when » de l'horloge audio. */
+export function click(accent, when) {
+  init();
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.value = accent ? 1760 : 1175;
+  g.gain.setValueAtTime(0.0001, when);
+  g.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.3, when + 0.002);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+  o.connect(g).connect(out);
+  o.start(when);
+  o.stop(when + 0.06);
+}

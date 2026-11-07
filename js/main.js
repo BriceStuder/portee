@@ -2,7 +2,7 @@
 import { makeNote, fromMidi, noteName, enharmonic, isRare, noteRange, keyboardRange, LETTERS_FR, LETTERS_EN } from './theory.js';
 import { renderStaff } from './staff.js';
 import { Keyboard } from './keyboard.js';
-import { playNote } from './audio.js';
+import { playNote, click, audioNow } from './audio.js';
 import { initMidi } from './midi.js';
 import { load, save } from './store.js';
 import { CLEFS } from './theory.js';
@@ -16,7 +16,7 @@ const LIVES = 3;
 const OK_DELAY = 450, BAD_DELAY = 1400; // pause (ms) avant la note suivante
 
 const DEFAULTS = {
-  activity: 'game', spell: 'sharp', autoClef: true,
+  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80,
   clef: 'treble', mode: 'series', seriesLength: 20, time: 5, kb: 'strict',
   names: true, notation: 'fr', accidentals: true, rare: false, range: 2, sound: true, hideKb: true, theme: null,
 };
@@ -187,6 +187,7 @@ function end() {
 }
 
 function stopGame() {
+  metroStop();
   clearTimeout(pending);
   stopTimer();
   G = fresh();
@@ -206,17 +207,50 @@ function stopGame() {
 
 // ---------- mode libre : la portée affiche ce qui est joué ----------
 // Les notes jouées ensemble (accord) restent affichées jusqu'à la prochaine attaque après relâchement.
-const FREE = { held: new Set(), shown: [], clef: 'treble' };
+const FREE = { held: new Set(), shown: [], clef: 'treble', t0: 0, value: null, raf: 0 };
+
+// Figures de note, en temps (noires). La durée tenue est arrondie à la figure la plus proche.
+const VALUES = [
+  { type: 's', beats: 0.25, name: 'double croche' },
+  { type: 'e', beats: 0.5, name: 'croche' },
+  { type: 'e', dot: true, beats: 0.75, name: 'croche pointée' },
+  { type: 'q', beats: 1, name: 'noire' },
+  { type: 'q', dot: true, beats: 1.5, name: 'noire pointée' },
+  { type: 'h', beats: 2, name: 'blanche' },
+  { type: 'h', dot: true, beats: 3, name: 'blanche pointée' },
+  { type: 'w', beats: 4, name: 'ronde' },
+];
+const heldBeats = () => (performance.now() - FREE.t0) / 60000 * S.tempo;
+// Pendant l'appui : la figure grandit au fil du temps (dernière figure atteinte).
+const liveValue = b => VALUES.filter(v => v.beats <= b).pop() || VALUES[0];
+// Au relâchement : figure la plus proche (à l'échelle logarithmique, comme l'oreille).
+const nearestValue = b => VALUES.reduce((a, v) => Math.abs(Math.log2(v.beats / b)) < Math.abs(Math.log2(a.beats / b)) ? v : a);
 
 function freeOn(m) {
   const fresh = FREE.held.size === 0;
-  if (fresh) FREE.shown = [];
+  if (fresh) {
+    FREE.shown = [];
+    FREE.t0 = performance.now();
+    FREE.value = S.durations ? VALUES[0] : null;
+    clearInterval(FREE.raf);
+    if (S.durations) FREE.raf = setInterval(growValue, 30);
+  }
   FREE.held.add(m);
   if (!FREE.shown.includes(m)) FREE.shown.push(m);
   renderFree(fresh);
 }
 
-function release(m) { FREE.held.delete(m); }
+function growValue() {
+  const v = liveValue(heldBeats());
+  if (v !== FREE.value) { FREE.value = v; renderFree(false); }
+}
+
+function release(m) {
+  if (!FREE.held.delete(m) || FREE.held.size || !free() || !S.durations || !FREE.value) return;
+  clearInterval(FREE.raf);
+  FREE.value = nearestValue(heldBeats());
+  renderFree(false);
+}
 
 // Nombre maximal de lignes supplémentaires qu'exigent les notes dans une clé.
 const ledgers = (clef, notes) => Math.max(...notes.map(n => {
@@ -232,9 +266,58 @@ function renderFree(animate) {
     const cur = ledgers(FREE.clef, notes);
     if (cur >= 2 && ledgers(other, notes) < cur) { FREE.clef = other; syncHeader(); }
   }
-  renderStaff(staffSvg, { clef: FREE.clef, notes, animate });
-  if (notes.length) setFeedback('', notes.slice().sort((a, b) => a.midi - b.midi).map(n => noteName(n, S.notation)).join(' · '));
+  const value = S.durations ? FREE.value : null;
+  renderStaff(staffSvg, { clef: FREE.clef, notes, value, animate });
+  if (notes.length) setFeedback('', notes.slice().sort((a, b) => a.midi - b.midi).map(n => noteName(n, S.notation)).join(' · '), value?.name || '');
   else setFeedback('hint', 'Jouez une note : elle s\'affiche sur la portée');
+}
+
+// ---------- métronome (mode libre) ----------
+// Programmation sur l'horloge audio, plus régulière que les minuteurs JavaScript.
+const METRO = { on: false, next: 0, beat: 0, timer: 0 };
+
+function metroSchedule() {
+  while (METRO.next < audioNow() + 0.12) {
+    const accent = METRO.beat % 4 === 0, when = METRO.next;
+    click(accent, when);
+    setTimeout(() => flashBeat(accent), Math.max(0, (when - audioNow()) * 1000));
+    METRO.next += 60 / S.tempo;
+    METRO.beat++;
+  }
+}
+function metroStart() {
+  if (METRO.on) return;
+  METRO.on = true;
+  METRO.beat = 0;
+  METRO.next = audioNow() + 0.08;
+  metroSchedule();
+  METRO.timer = setInterval(metroSchedule, 25);
+  renderMetro();
+}
+function metroStop() {
+  if (!METRO.on) return;
+  METRO.on = false;
+  clearInterval(METRO.timer);
+  renderMetro();
+}
+function flashBeat(accent) {
+  if (!METRO.on) return;
+  const d = $('#metroBtn .dot');
+  d.classList.remove('tick', 'accent');
+  void d.offsetWidth; // relance l'animation
+  d.classList.add('tick');
+  d.classList.toggle('accent', accent);
+}
+function renderMetro() {
+  const b = $('#metroBtn');
+  const show = free() && S.durations;
+  if (!show) metroStop();
+  b.hidden = !show;
+  b.classList.toggle('on', METRO.on);
+  b.setAttribute('aria-pressed', METRO.on);
+  b.querySelector('.txt').textContent = `= ${S.tempo}`;
+  b.setAttribute('aria-label', `Métronome, noire = ${S.tempo}`);
+  b.title = METRO.on ? 'Arrêter le métronome' : 'Lancer le métronome';
 }
 
 function enterFree() {
@@ -243,6 +326,7 @@ function enterFree() {
   G = fresh();
   kb.clearMarks();
   FREE.clef = S.clef;
+  if (!S.durations) FREE.value = null;
   $('#overlay').classList.add('hide');
   $('#timer').classList.add('off');
   hud();
@@ -310,6 +394,9 @@ const CONTROLS = [
     hint: s => s.activity === 'free' ? 'La portée affiche simplement les notes jouées' : 'Une note s\'affiche : jouez-la' },
   { key: 'spell', label: 'Touches noires', opts: [['sharp', 'Dièses ♯'], ['flat', 'Bémols ♭']], show: s => !game(s) },
   { key: 'autoClef', label: 'Changer de clé automatiquement', toggle: true, show: s => !game(s) },
+  { key: 'durations', label: 'Durée des notes (ronde, blanche, noire…)', toggle: true, show: s => !game(s) },
+  { key: 'tempo', label: 'Tempo (noires par minute)', opts: [[60, '60'], [72, '72'], [80, '80'], [100, '100'], [120, '120']],
+    show: s => !game(s) && s.durations, hint: () => 'Le bouton « ♩ = tempo » en haut lance le métronome' },
   { key: 'mode', label: 'Mode de jeu', opts: [['series', 'Série'], ['infinite', 'Infini']], show: game,
     hint: s => s.mode === 'infinite' ? `Le temps par note diminue à chaque bonne réponse · ${LIVES} vies` : '' },
   { key: 'seriesLength', label: 'Longueur de série', opts: [[10, '10'], [20, '20'], [50, '50']], show: s => game(s) && s.mode === 'series' },
@@ -402,6 +489,7 @@ function refreshAll() {
   buildKeyboard();
   applyKbVisibility();
   if (free()) enterFree(); else stopGame();
+  renderMetro();
 }
 
 function applyTheme() {
@@ -417,6 +505,7 @@ $('#clefSeg').addEventListener('click', e => {
   if (b.dataset.v !== S.clef) set('clef', b.dataset.v);
   else if (free() && FREE.clef !== S.clef) enterFree();
 });
+$('#metroBtn').onclick = () => (METRO.on ? metroStop : metroStart)();
 $('#actSeg').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (b && b.dataset.v !== S.activity) set('activity', b.dataset.v);
