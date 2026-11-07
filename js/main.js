@@ -4,6 +4,7 @@ import { renderStaff } from './staff.js';
 import { Keyboard } from './keyboard.js';
 import { playNote, click, audioNow } from './audio.js';
 import { initMidi } from './midi.js';
+import { analyse } from './chords.js';
 import { load, save } from './store.js';
 import { CLEFS } from './theory.js';
 
@@ -16,7 +17,7 @@ const LIVES = 3;
 const OK_DELAY = 450, BAD_DELAY = 1400; // pause (ms) avant la note suivante
 
 const DEFAULTS = {
-  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80,
+  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80, chords: true, wake: true,
   clef: 'treble', mode: 'series', seriesLength: 20, time: 5, kb: 'strict',
   names: true, notation: 'fr', accidentals: true, rare: false, range: 2, sound: true, hideKb: true, theme: null,
 };
@@ -267,8 +268,10 @@ function renderFree(animate) {
     if (cur >= 2 && ledgers(other, notes) < cur) { FREE.clef = other; syncHeader(); }
   }
   const value = S.durations ? FREE.value : null;
-  renderStaff(staffSvg, { clef: FREE.clef, notes, value, animate });
-  if (notes.length) setFeedback('', notes.slice().sort((a, b) => a.midi - b.midi).map(n => noteName(n, S.notation)).join(' · '), value?.name || '');
+  const chord = S.chords ? analyse(FREE.shown, S.notation, S.spell) : null;
+  renderStaff(staffSvg, { clef: FREE.clef, notes, value, label: chord?.label, labelKind: chord?.kind, animate });
+  const sub = [chord?.desc, value?.name].filter(Boolean).join(' · ');
+  if (notes.length) setFeedback('', notes.slice().sort((a, b) => a.midi - b.midi).map(n => noteName(n, S.notation)).join(' · '), sub);
   else setFeedback('hint', 'Jouez une note : elle s\'affiche sur la portée');
 }
 
@@ -309,11 +312,11 @@ function flashBeat(accent) {
   d.classList.toggle('accent', accent);
 }
 function renderMetro() {
-  const b = $('#metroBtn');
+  const b = $('#metroBtn'), box = $('#metroBox');
   const show = free() && S.durations;
   if (!show) metroStop();
-  b.hidden = !show;
-  b.classList.toggle('on', METRO.on);
+  box.hidden = !show;
+  box.classList.toggle('on', METRO.on);
   b.setAttribute('aria-pressed', METRO.on);
   b.querySelector('.txt').textContent = `= ${S.tempo}`;
   b.setAttribute('aria-label', `Métronome, noire = ${S.tempo}`);
@@ -394,9 +397,10 @@ const CONTROLS = [
     hint: s => s.activity === 'free' ? 'La portée affiche simplement les notes jouées' : 'Une note s\'affiche : jouez-la' },
   { key: 'spell', label: 'Touches noires', opts: [['sharp', 'Dièses ♯'], ['flat', 'Bémols ♭']], show: s => !game(s) },
   { key: 'autoClef', label: 'Changer de clé automatiquement', toggle: true, show: s => !game(s) },
-  { key: 'durations', label: 'Durée des notes (ronde, blanche, noire…)', toggle: true, show: s => !game(s) },
-  { key: 'tempo', label: 'Tempo (noires par minute)', opts: [[60, '60'], [72, '72'], [80, '80'], [100, '100'], [120, '120']],
-    show: s => !game(s) && s.durations, hint: () => 'Le bouton « ♩ = tempo » en haut lance le métronome' },
+  { key: 'chords', label: 'Nommer les accords et les intervalles', toggle: true, show: s => !game(s) },
+  { key: 'durations', label: 'Durée des notes (ronde, blanche, noire…)', toggle: true, show: s => !game(s),
+    hint: s => s.durations ? 'Tempo et métronome : boutons « − ♩ = 80 + » en haut' : '' },
+
   { key: 'mode', label: 'Mode de jeu', opts: [['series', 'Série'], ['infinite', 'Infini']], show: game,
     hint: s => s.mode === 'infinite' ? `Le temps par note diminue à chaque bonne réponse · ${LIVES} vies` : '' },
   { key: 'seriesLength', label: 'Longueur de série', opts: [[10, '10'], [20, '20'], [50, '50']], show: s => game(s) && s.mode === 'series' },
@@ -409,6 +413,7 @@ const CONTROLS = [
   { key: 'rare', label: 'Cas rares (Mi♯, Si♯, Fa♭, Do♭)', toggle: true, show: s => game(s) && s.accidentals },
   { key: 'range', label: 'Étendue', opts: [[0, 'Portée'], [2, '+2 lignes'], [3, '+3 lignes']] },
   { key: 'sound', label: 'Son du clavier à l\'écran', toggle: true },
+  { key: 'wake', label: 'Empêcher la mise en veille de l\'écran', toggle: true, show: () => 'wakeLock' in navigator },
   { key: 'hideKb', label: 'Masquer le clavier quand un piano MIDI est branché', toggle: true },
 ];
 
@@ -482,6 +487,7 @@ function set(key, val) {
 }
 
 function refreshAll() {
+  applyWake();
   syncHeader();
   renderControls();
   renderStats();
@@ -491,6 +497,21 @@ function refreshAll() {
   if (free()) enterFree(); else stopGame();
   renderMetro();
 }
+
+// ---------- écran toujours allumé (Wake Lock) ----------
+// Le verrou est relâché par le navigateur quand l'appli passe en arrière-plan : on le redemande au retour.
+let wakeLock = null;
+async function applyWake() {
+  if (!('wakeLock' in navigator)) return;
+  if (!S.wake) { wakeLock?.release().catch(() => {}); wakeLock = null; return; }
+  if (wakeLock && !wakeLock.released) return;
+  if (document.visibilityState !== 'visible') return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+  } catch { wakeLock = null; } // refusé (économie d'énergie…) : on réessaiera au prochain geste
+}
+document.addEventListener('visibilitychange', applyWake);
+window.addEventListener('pointerdown', () => { if (S.wake && (!wakeLock || wakeLock.released)) applyWake(); }, { capture: true });
 
 function applyTheme() {
   const t = S.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -506,6 +527,30 @@ $('#clefSeg').addEventListener('click', e => {
   else if (free() && FREE.clef !== S.clef) enterFree();
 });
 $('#metroBtn').onclick = () => (METRO.on ? metroStop : metroStart)();
+// Tempo : − / + de 1 en 1. En maintenant appuyé, ça défile, puis passe de 5 en 5 après un moment.
+const TEMPO_MIN = 30, TEMPO_MAX = 240;
+function stepTempo(dir, step = 1) {
+  const base = step > 1 ? (dir > 0 ? Math.floor(S.tempo / step) * step : Math.ceil(S.tempo / step) * step) : S.tempo;
+  const t = Math.min(TEMPO_MAX, Math.max(TEMPO_MIN, base + dir * step));
+  if (t === S.tempo) return;
+  S.tempo = t;
+  save('settings', S);
+  renderMetro();
+}
+for (const [id, dir] of [['#tempoDown', -1], ['#tempoUp', 1]]) {
+  const btn = $(id);
+  let rep = 0;
+  const stop = () => { clearTimeout(rep); clearInterval(rep); };
+  btn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    stepTempo(dir);
+    stop();
+    let n = 0;
+    rep = setTimeout(() => { rep = setInterval(() => stepTempo(dir, ++n > 15 ? 5 : 1), 90); }, 400);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => btn.addEventListener(t, stop));
+  btn.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); stepTempo(dir); } });
+}
 $('#actSeg').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (b && b.dataset.v !== S.activity) set('activity', b.dataset.v);

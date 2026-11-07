@@ -21,15 +21,18 @@ const FLAG = 'M0 0C1 9 6 13 10 18C14 23 15 30 12 38C14 29 12 24 8 21C5 19 2 18 0
  * @param {{clef:'treble'|'bass', note?:object|null, notes?:object[], value?:{type:'w'|'h'|'q'|'e'|'s', dot?:boolean}|null, state?:''|'ok'|'bad', animate?:boolean}} opts
  * notes : plusieurs notes empilées (accord, mode libre). Le cadre s'agrandit si des notes sortent du cadre habituel.
  * value : figure de note (ronde par défaut).
+ * label : nom d'accord ou d'intervalle, écrit au-dessus des notes.
  */
-export function renderStaff(svg, { clef, note = null, notes = null, value = null, state = '', animate = false }) {
+export function renderStaff(svg, { clef, note = null, notes = null, value = null, label = '', labelKind = 'chord', state = '', animate = false }) {
   const list = (notes || (note ? [note] : [])).slice().sort((a, b) => a.d - b.d || a.acc - b.acc);
   const yOf = n => BOT - (n.d - CLEFS[clef].bottom) * SP / 2;
-  let vy = 0, vh = 210;
+  let vy = 0, vh = 210, labelY = 0;
   if (list.length) {
     const lo = yOf(list[0]), hi = yOf(list[list.length - 1]);
     const stem = (value?.type || 'w') !== 'w', stemUp = (lo + hi) / 2 >= MID;
-    const yMin = (stem && stemUp ? Math.min(hi - 56, MID) : hi) - 34;
+    const top = stem && stemUp ? Math.min(hi - 56, MID) : hi - 10;
+    labelY = Math.min(TOP - 26, top - 26);
+    const yMin = label ? labelY - 30 : top - (stem && stemUp ? 34 : 24);
     const yMax = (stem && !stemUp ? Math.max(lo + 56, MID) : lo) + 24;
     if (yMin < vy) { vh += vy - yMin; vy = yMin; }
     if (yMax > vy + vh) vh = yMax - vy;
@@ -107,5 +110,6 @@ export function renderStaff(svg, { clef, note = null, notes = null, value = null
     }
   }
   ng.appendChild(notesG);
+  if (label) ng.appendChild(el('text', { class: 'chord-label ' + labelKind, x, y: labelY, 'text-anchor': 'middle' }, label));
   svg.appendChild(ng);
 }
