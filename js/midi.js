@@ -22,7 +22,7 @@ export async function initMidi({ onNoteOn, onNoteOff, onStatus }) {
     // Sous Linux, le port virtuel « Midi Through » est toujours présent : on l'ignore.
     const inputs = [...access.inputs.values()].filter(i => i.state === 'connected' && !/through/i.test(i.name));
     inputs.forEach(i => { i.onmidimessage = handle; });
-    onStatus({ supported: true, names: inputs.map(i => i.name.replace(/\s+MIDI\s*\d*$/i, '').trim()) });
+    onStatus({ supported: true, names: [...new Set(inputs.map(i => (i.manufacturer && !i.name.toLowerCase().includes(i.manufacturer.toLowerCase()) ? i.manufacturer + ' ' : '') + i.name))] });
   };
   access.onstatechange = bind;
   bind();

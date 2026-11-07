@@ -25,6 +25,16 @@ export function makeNote(d, acc = 0) {
   return { d, letter, oct, acc, midi: 12 * (oct + 1) + STEPS[letter] + acc };
 }
 
+// Note correspondant à une touche (numéro MIDI), écrite avec des dièses ou des bémols
+const PC_LETTER_SHARP = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6];
+const PC_LETTER_FLAT = [0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6];
+export function fromMidi(m, spell = 'sharp') {
+  const pc = m % 12, oct = Math.floor(m / 12) - 1;
+  const letter = (spell === 'flat' ? PC_LETTER_FLAT : PC_LETTER_SHARP)[pc];
+  const n = makeNote(oct * 7 + letter, 0);
+  return makeNote(n.d, m - n.midi);
+}
+
 // Mi♯, Si♯, Fa♭, Do♭
 export const isRare = n =>
   (n.acc === 1 && (n.letter === 2 || n.letter === 6)) ||

@@ -1,10 +1,11 @@
 // Contrôleur : réglages, déroulement du jeu, liaison interface ↔ clavier ↔ MIDI.
-import { makeNote, noteName, enharmonic, isRare, noteRange, keyboardRange, LETTERS_FR, LETTERS_EN } from './theory.js';
+import { makeNote, fromMidi, noteName, enharmonic, isRare, noteRange, keyboardRange, LETTERS_FR, LETTERS_EN } from './theory.js';
 import { renderStaff } from './staff.js';
 import { Keyboard } from './keyboard.js';
 import { playNote } from './audio.js';
 import { initMidi } from './midi.js';
 import { load, save } from './store.js';
+import { CLEFS } from './theory.js';
 
 // ---------- constantes de jeu ----------
 const ACC_RATIO = 0.35;   // part des notes altérées quand les altérations sont actives
@@ -15,6 +16,7 @@ const LIVES = 3;
 const OK_DELAY = 450, BAD_DELAY = 1400; // pause (ms) avant la note suivante
 
 const DEFAULTS = {
+  activity: 'game', spell: 'sharp', autoClef: true,
   clef: 'treble', mode: 'series', seriesLength: 20, time: 5, kb: 'strict',
   names: true, notation: 'fr', accidentals: true, rare: false, range: 2, sound: true, hideKb: true, theme: null,
 };
@@ -24,7 +26,7 @@ let best = load('best', {});
 
 const $ = s => document.querySelector(s);
 const staffSvg = $('#staff');
-const kb = new Keyboard($('#keys'), $('#keysWrap'), m => press(m, 'screen'));
+const kb = new Keyboard($('#keys'), $('#keysWrap'), m => press(m, 'screen'), m => release(m));
 const midi = { supported: true, names: [] };
 
 // ---------- état de la partie ----------
@@ -33,6 +35,7 @@ let G = fresh();
 let raf = 0, pending = 0, t0 = 0;
 
 const infinite = () => S.mode === 'infinite';
+const free = () => S.activity === 'free';
 const fmtSec = ms => (ms / 1000).toFixed(1).replace('.', ',') + ' s';
 const statKey = n => `${S.clef}:${n.d}:${n.acc}`;
 const bestKey = () => [S.clef, S.kb, S.accidentals, S.rare, S.range].join('|');
@@ -110,6 +113,7 @@ function nextNote() {
 
 function press(m, src) {
   if (src !== 'midi' && S.sound) playNote(m); // le piano MIDI produit déjà son propre son
+  if (free()) { freeOn(m); return; }
   if ($('#drawer').classList.contains('open')) return;
   if (G.phase === 'playing') { if (!G.lock) evaluate(m); }
   else if (G.phase === 'idle') start();
@@ -200,6 +204,52 @@ function stopGame() {
   renderLives();
 }
 
+// ---------- mode libre : la portée affiche ce qui est joué ----------
+// Les notes jouées ensemble (accord) restent affichées jusqu'à la prochaine attaque après relâchement.
+const FREE = { held: new Set(), shown: [], clef: 'treble' };
+
+function freeOn(m) {
+  const fresh = FREE.held.size === 0;
+  if (fresh) FREE.shown = [];
+  FREE.held.add(m);
+  if (!FREE.shown.includes(m)) FREE.shown.push(m);
+  renderFree(fresh);
+}
+
+function release(m) { FREE.held.delete(m); }
+
+// Nombre maximal de lignes supplémentaires qu'exigent les notes dans une clé.
+const ledgers = (clef, notes) => Math.max(...notes.map(n => {
+  const p = n.d - CLEFS[clef].bottom;
+  return p < 0 ? Math.floor(-p / 2) : Math.floor(Math.max(0, p - 8) / 2);
+}));
+
+function renderFree(animate) {
+  const notes = FREE.shown.map(m => fromMidi(m, S.spell));
+  if (S.autoClef && notes.length) {
+    const other = FREE.clef === 'treble' ? 'bass' : 'treble';
+    // On change de clé dès 2 lignes supplémentaires si l'autre clé fait mieux (Do4 garde la clé en cours).
+    const cur = ledgers(FREE.clef, notes);
+    if (cur >= 2 && ledgers(other, notes) < cur) { FREE.clef = other; syncHeader(); }
+  }
+  renderStaff(staffSvg, { clef: FREE.clef, notes, animate });
+  if (notes.length) setFeedback('', notes.slice().sort((a, b) => a.midi - b.midi).map(n => noteName(n, S.notation)).join(' · '));
+  else setFeedback('hint', 'Jouez une note : elle s\'affiche sur la portée');
+}
+
+function enterFree() {
+  clearTimeout(pending);
+  stopTimer();
+  G = fresh();
+  kb.clearMarks();
+  FREE.clef = S.clef;
+  $('#overlay').classList.add('hide');
+  $('#timer').classList.add('off');
+  hud();
+  renderLives();
+  renderFree(false);
+}
+
 // ---------- affichage ----------
 function showOverlay(html) {
   const o = $('#overlay');
@@ -214,6 +264,7 @@ function setFeedback(kind, text = '', sub = '') {
 }
 
 function hud() {
+  document.querySelectorAll('header .stat').forEach(e => { e.hidden = free(); });
   if (infinite()) {
     $('#stat1v').textContent = fmtSec(G.speed * 1000);
     $('#stat1l').textContent = `Niveau ${Math.floor(G.score / 5) + 1}`;
@@ -228,12 +279,17 @@ function hud() {
 
 function renderLives(lostOne = false) {
   const l = $('#lives');
-  l.hidden = !infinite();
+  l.hidden = !infinite() || free();
   l.innerHTML = Array.from({ length: LIVES }, (_, i) =>
     `<span class="${i < G.lives ? '' : 'off'}${lostOne && i === G.lives ? ' lost' : ''}">♥</span>`).join('');
 }
 
 function renderHead() {
+  if (free()) {
+    $('#headMode').textContent = 'Jeu libre';
+    $('#headTags').textContent = S.spell === 'flat' ? 'Touches noires en bémols' : 'Touches noires en dièses';
+    return;
+  }
   $('#headMode').textContent = infinite() ? 'Mode infini' : `Série · ${S.seriesLength} notes`;
   const tags = [S.accidentals ? 'Altérations' : 'Sans altérations', S.kb === 'simple' ? '1 octave' : 'Octave stricte'];
   $('#headTags').textContent = tags.join(' · ');
@@ -248,17 +304,22 @@ function buildKeyboard() {
 }
 
 // ---------- réglages ----------
+const game = s => s.activity === 'game';
 const CONTROLS = [
-  { key: 'mode', label: 'Mode de jeu', opts: [['series', 'Série'], ['infinite', 'Infini']],
+  { key: 'activity', label: 'Activité', opts: [['game', 'Jeu'], ['free', 'Libre']],
+    hint: s => s.activity === 'free' ? 'La portée affiche simplement les notes jouées' : 'Une note s\'affiche : jouez-la' },
+  { key: 'spell', label: 'Touches noires', opts: [['sharp', 'Dièses ♯'], ['flat', 'Bémols ♭']], show: s => !game(s) },
+  { key: 'autoClef', label: 'Changer de clé automatiquement', toggle: true, show: s => !game(s) },
+  { key: 'mode', label: 'Mode de jeu', opts: [['series', 'Série'], ['infinite', 'Infini']], show: game,
     hint: s => s.mode === 'infinite' ? `Le temps par note diminue à chaque bonne réponse · ${LIVES} vies` : '' },
-  { key: 'seriesLength', label: 'Longueur de série', opts: [[10, '10'], [20, '20'], [50, '50']], show: s => s.mode === 'series' },
-  { key: 'time', label: 'Temps par note', opts: [[0, '∞'], [10, '10 s'], [5, '5 s'], [3, '3 s'], [2, '2 s']], show: s => s.mode === 'series' },
+  { key: 'seriesLength', label: 'Longueur de série', opts: [[10, '10'], [20, '20'], [50, '50']], show: s => game(s) && s.mode === 'series' },
+  { key: 'time', label: 'Temps par note', opts: [[0, '∞'], [10, '10 s'], [5, '5 s'], [3, '3 s'], [2, '2 s']], show: s => game(s) && s.mode === 'series' },
   { key: 'kb', label: 'Clavier', opts: [['strict', 'Octave stricte'], ['simple', '1 octave']],
     hint: s => s.kb === 'simple' ? 'Seul le nom de la note compte, quelle que soit l\'octave' : 'Il faut jouer la note à la bonne hauteur' },
   { key: 'names', label: 'Noms sur les touches', toggle: true },
   { key: 'notation', label: 'Notation', opts: [['fr', 'Do Ré Mi'], ['en', 'C D E'], ['both', 'Les deux']] },
-  { key: 'accidentals', label: 'Altérations ♯ ♭', toggle: true },
-  { key: 'rare', label: 'Cas rares (Mi♯, Si♯, Fa♭, Do♭)', toggle: true, show: s => s.accidentals },
+  { key: 'accidentals', label: 'Altérations ♯ ♭', toggle: true, show: game },
+  { key: 'rare', label: 'Cas rares (Mi♯, Si♯, Fa♭, Do♭)', toggle: true, show: s => game(s) && s.accidentals },
   { key: 'range', label: 'Étendue', opts: [[0, 'Portée'], [2, '+2 lignes'], [3, '+3 lignes']] },
   { key: 'sound', label: 'Son du clavier à l\'écran', toggle: true },
   { key: 'hideKb', label: 'Masquer le clavier quand un piano MIDI est branché', toggle: true },
@@ -305,7 +366,8 @@ function renderMidi() {
   const on = midi.names.length > 0;
   pill.hidden = !midi.supported;
   pill.classList.toggle('on', on);
-  pill.querySelector('.txt').textContent = on ? `${midi.names[0]} · USB` : 'Pas de piano MIDI';
+  pill.querySelector('.txt').textContent = on ? 'Piano connecté' : 'Pas de piano MIDI';
+  pill.title = midi.names.join(', ');
   row.innerHTML = !midi.supported ? 'Ce navigateur ne gère pas le Web MIDI (utilisez Chrome ou Edge).'
     : midi.denied ? 'Accès MIDI refusé par le navigateur.'
     : on ? `<span class="dot on" style="display:inline-block;margin-right:6px"></span>${midi.names.join(', ')}`
@@ -321,7 +383,9 @@ function applyKbVisibility() {
 }
 
 function syncHeader() {
-  document.querySelectorAll('#clefSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === S.clef));
+  const clef = free() ? FREE.clef : S.clef;
+  document.querySelectorAll('#clefSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === clef));
+  document.querySelectorAll('#actSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === S.activity));
 }
 
 function set(key, val) {
@@ -337,7 +401,7 @@ function refreshAll() {
   renderHead();
   buildKeyboard();
   applyKbVisibility();
-  stopGame();
+  if (free()) enterFree(); else stopGame();
 }
 
 function applyTheme() {
@@ -349,7 +413,13 @@ function applyTheme() {
 // ---------- événements ----------
 $('#clefSeg').addEventListener('click', e => {
   const b = e.target.closest('button');
-  if (b && b.dataset.v !== S.clef) set('clef', b.dataset.v);
+  if (!b) return;
+  if (b.dataset.v !== S.clef) set('clef', b.dataset.v);
+  else if (free() && FREE.clef !== S.clef) enterFree();
+});
+$('#actSeg').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b && b.dataset.v !== S.activity) set('activity', b.dataset.v);
 });
 $('#themeBtn').onclick = () => {
   S.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
@@ -392,7 +462,7 @@ window.addEventListener('keydown', e => {
   if ($('#drawer').classList.contains('open')) return;
   if (e.code === 'Space') {
     e.preventDefault();
-    if (G.phase !== 'playing') start();
+    if (!free() && G.phase !== 'playing') start();
     return;
   }
   if (S.kb !== 'simple' || !(e.code in KEYMAP) || e.repeat || held.has(e.code)) return;
@@ -404,11 +474,12 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => {
   if (!held.delete(e.code)) return;
   kb.up(60 + KEYMAP[e.code]);
+  release(60 + KEYMAP[e.code]);
 });
 
 initMidi({
   onNoteOn: n => { kb.down(n); press(n, 'midi'); },
-  onNoteOff: n => kb.up(n),
+  onNoteOff: n => { kb.up(n); release(n); },
   onStatus: s => { Object.assign(midi, { names: [], denied: false }, s); renderMidi(); },
 });
 
@@ -416,7 +487,7 @@ initMidi({
 applyTheme();
 renderMidi();
 refreshAll();
-document.fonts?.ready.then(() => { if (G.phase !== 'playing') renderStaff(staffSvg, { clef: S.clef }); });
+document.fonts?.ready.then(() => { if (free()) renderFree(false); else if (G.phase !== 'playing') renderStaff(staffSvg, { clef: S.clef }); });
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

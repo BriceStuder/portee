@@ -11,7 +11,7 @@ const el = (t, a = {}, txt) => {
 const pick = (notation, fr, en, sep) => notation === 'fr' ? fr : notation === 'en' ? en : fr + sep + en;
 
 export class Keyboard {
-  constructor(svg, wrap, onPress) {
+  constructor(svg, wrap, onPress, onRelease = () => {}) {
     this.svg = svg;
     this.wrap = wrap;
     this.onPress = onPress;
@@ -27,6 +27,7 @@ export class Keyboard {
       this.onPress(m);
       const up = () => {
         this.up(m);
+        this.onRelease(m);
         window.removeEventListener('pointerup', up);
         window.removeEventListener('pointercancel', up);
       };
