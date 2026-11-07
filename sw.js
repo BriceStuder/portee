@@ -1,6 +1,6 @@
 // Service worker : met toute l'appli en cache (polices comprises) pour un usage hors ligne.
 // Réseau d'abord : en ligne, on récupère toujours la dernière version ; hors ligne, on sert le cache.
-const CACHE = 'portee-v6';
+const CACHE = 'portee-v7';
 const ASSETS = ['./', 'index.html', 'css/style.css', 'css/fonts.css', 'js/main.js', 'js/theory.js', 'js/staff.js',
   'js/keyboard.js', 'js/audio.js', 'js/midi.js', 'js/store.js', 'icon.svg', 'manifest.webmanifest',
   'fonts/Fraunces-latin-1.woff2', 'fonts/Fraunces-latin-ext-0.woff2', 'fonts/Inter-latin-3.woff2', 'fonts/Inter-latin-ext-2.woff2', 'fonts/NotoMusic-music-4.woff2'];

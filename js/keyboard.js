@@ -15,6 +15,7 @@ export class Keyboard {
     this.svg = svg;
     this.wrap = wrap;
     this.onPress = onPress;
+    this.onRelease = onRelease;
     this.keys = new Map();
     this.simple = false;
 
