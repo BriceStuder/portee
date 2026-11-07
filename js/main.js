@@ -17,7 +17,7 @@ const LIVES = 3;
 const OK_DELAY = 450, BAD_DELAY = 1400; // pause (ms) avant la note suivante
 
 const DEFAULTS = {
-  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80, chords: true, wake: true, scroll: true, rests: true,
+  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80, metre: '4/4', chords: true, wake: true, scroll: true, rests: true,
   clef: 'treble', mode: 'series', seriesLength: 20, time: 5, kb: 'strict',
   names: true, notation: 'fr', accidentals: true, rare: false, range: 2, sound: true, hideKb: true, theme: null,
 };
@@ -320,13 +320,23 @@ function renderFree(animate) {
 // ---------- métronome (mode libre) ----------
 // Programmation sur l'horloge audio, plus régulière que les minuteurs JavaScript.
 const METRO = { on: false, next: 0, beat: 0, timer: 0 };
+// Mesures : n clics par mesure ; en 6/8 le métronome bat les croches (2 par noire), avec un appui sur la 4e.
+const METRES = {
+  '2/4': { n: 2, sub: 1 },
+  '3/4': { n: 3, sub: 1 },
+  '4/4': { n: 4, sub: 1 },
+  '5/4': { n: 5, sub: 1 },
+  '6/8': { n: 6, sub: 2, mid: 3 },
+};
+const metre = () => METRES[S.metre] || METRES['4/4'];
 
 function metroSchedule() {
   while (METRO.next < audioNow() + 0.12) {
-    const accent = METRO.beat % 4 === 0, when = METRO.next;
-    click(accent, when);
-    setTimeout(() => flashBeat(accent), Math.max(0, (when - audioNow()) * 1000));
-    METRO.next += 60 / S.tempo;
+    const M = metre(), pos = METRO.beat % M.n, when = METRO.next;
+    const level = pos === 0 ? 2 : pos === M.mid ? 1 : 0;
+    click(level, when);
+    setTimeout(() => flashBeat(level === 2), Math.max(0, (when - audioNow()) * 1000));
+    METRO.next += 60 / S.tempo / M.sub;
     METRO.beat++;
   }
 }
@@ -361,6 +371,8 @@ function renderMetro() {
   box.classList.toggle('on', METRO.on);
   b.setAttribute('aria-pressed', METRO.on);
   b.querySelector('.txt').textContent = `= ${S.tempo}`;
+  $('#metreBtn').textContent = S.metre;
+  $('#metreBtn').setAttribute('aria-label', `Mesure ${S.metre}, changer`);
   b.setAttribute('aria-label', `Métronome, noire = ${S.tempo}`);
   b.title = METRO.on ? 'Arrêter le métronome' : 'Lancer le métronome';
 }
@@ -445,6 +457,8 @@ const CONTROLS = [
   { key: 'chords', label: 'Nommer les accords et les intervalles', toggle: true, show: s => !game(s) },
   { key: 'durations', label: 'Durée des notes (ronde, blanche, noire…)', toggle: true, show: s => !game(s),
     hint: s => s.durations ? 'Tempo et métronome : boutons « − ♩ = 80 + » en haut' : '' },
+  { key: 'metre', label: 'Mesure du métronome', opts: [['2/4', '2/4'], ['3/4', '3/4'], ['4/4', '4/4'], ['5/4', '5/4'], ['6/8', '6/8']],
+    show: s => !game(s) && s.durations, hint: s => s.metre === '6/8' ? 'Le métronome bat les croches, avec un appui sur la 1re et la 4e' : '' },
 
   { key: 'mode', label: 'Mode de jeu', opts: [['series', 'Série'], ['infinite', 'Infini']], show: game,
     hint: s => s.mode === 'infinite' ? `Le temps par note diminue à chaque bonne réponse · ${LIVES} vies` : '' },
@@ -572,6 +586,17 @@ $('#clefSeg').addEventListener('click', e => {
   else if (free() && FREE.clef !== S.clef) enterFree();
 });
 $('#clearSeq').onclick = clearSeq;
+// Mesure : chaque appui passe à la suivante. Le métronome repart sur un premier temps.
+function setMetre(m) {
+  S.metre = m;
+  save('settings', S);
+  METRO.beat = 0;
+  renderMetro();
+}
+$('#metreBtn').onclick = () => {
+  const keys = Object.keys(METRES);
+  setMetre(keys[(keys.indexOf(S.metre) + 1) % keys.length]);
+};
 // Rotation du téléphone : la partition se recalcule à la nouvelle largeur.
 let resizeT = 0;
 window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (free() && S.scroll) renderFree(false); }, 150); });

@@ -49,13 +49,16 @@ export function audioNow() {
   return ctx.currentTime;
 }
 
-/** Clic de métronome (plus aigu sur le premier temps), joué à l'instant « when » de l'horloge audio. */
-export function click(accent, when) {
+/**
+ * Clic de métronome joué à l'instant « when » de l'horloge audio.
+ * level : 2 premier temps (aigu), 1 temps secondaire (6/8), 0 temps ordinaire.
+ */
+export function click(level, when) {
   init();
   const o = ctx.createOscillator(), g = ctx.createGain();
-  o.frequency.value = accent ? 1760 : 1175;
+  o.frequency.value = [1175, 1400, 1760][level];
   g.gain.setValueAtTime(0.0001, when);
-  g.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.3, when + 0.002);
+  g.gain.exponentialRampToValueAtTime([0.25, 0.38, 0.5][level], when + 0.002);
   g.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
   o.connect(g).connect(out);
   o.start(when);
