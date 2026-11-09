@@ -1,6 +1,6 @@
 // Contrôleur : réglages, déroulement du jeu, liaison interface ↔ clavier ↔ MIDI.
 import { makeNote, fromMidi, noteName, enharmonic, isRare, noteRange, keyboardRange, LETTERS_FR, LETTERS_EN } from './theory.js';
-import { renderStaff, renderSequence } from './staff.js';
+import { renderStaff, renderSequence, systemHeight } from './staff.js';
 import { Keyboard } from './keyboard.js';
 import { playNote, click, audioNow } from './audio.js';
 import { initMidi } from './midi.js';
@@ -17,7 +17,7 @@ const LIVES = 3;
 const OK_DELAY = 450, BAD_DELAY = 1400; // pause (ms) avant la note suivante
 
 const DEFAULTS = {
-  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80, metre: '4/4', chords: true, wake: true, scroll: true, rests: true,
+  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80, metre: '4/4', chords: true, wake: true, scroll: true, rests: true, grand: true, split: 60,
   clef: 'treble', mode: 'series', seriesLength: 20, time: 5, kb: 'strict',
   names: true, notation: 'fr', accidentals: true, rare: false, range: 2, sound: true, hideKb: true, theme: null,
 };
@@ -207,10 +207,14 @@ function stopGame() {
 }
 
 // ---------- mode libre : la portée affiche ce qui est joué ----------
-// Les notes jouées ensemble (accord) restent affichées jusqu'à la prochaine attaque après relâchement.
-// En mode « à la suite », chaque accord (et chaque silence) s'ajoute à une petite partition qui défile.
-const FREE = { held: new Set(), shown: [], clef: 'treble', t0: 0, value: null, raf: 0, seq: [], lastOff: 0 };
-const SEQ_MAX = 64;     // éléments gardés en mémoire
+// Les notes attaquées presque en même temps (moins de GROUP_MS d'écart) forment un accord ; une note jouée plus tard
+// ouvre un nouvel élément, même si un accord est encore tenu (main gauche qui tient, main droite qui joue).
+// Portée double : chaque main a sa propre voix (rythme, silences), sur sa portée. Sinon une seule voix.
+// En mode « à la suite », chaque élément (et chaque silence) s'ajoute à une petite partition qui défile.
+const GROUP_MS = 90;
+const voice = () => ({ held: new Set(), cur: null, chord: null, lastOff: 0, seq: [] });
+const FREE = { voices: {}, layout: '', clef: 'treble', raf: 0, last: null };
+const SEQ_MAX = 64;     // éléments gardés en mémoire par voix
 const REST_MIN = 0.3;   // en temps : un silence plus court est un simple lever de doigt (legato imparfait)
 
 // Figures de note, en temps (noires). La durée tenue est arrondie à la figure la plus proche.
@@ -225,59 +229,79 @@ const VALUES = [
   { type: 'w', beats: 4, name: 'ronde' },
 ];
 const toBeats = ms => ms / 60000 * S.tempo;
-const heldBeats = () => toBeats(performance.now() - FREE.t0);
 // Pendant l'appui : la figure grandit au fil du temps (dernière figure atteinte).
 const liveValue = b => VALUES.filter(v => v.beats <= b).pop() || VALUES[0];
-// Au relâchement : figure la plus proche (à l'échelle logarithmique, comme l'oreille).
+// À la fin : figure la plus proche (à l'échelle logarithmique, comme l'oreille).
 const nearestValue = b => VALUES.reduce((a, v) => Math.abs(Math.log2(v.beats / b)) < Math.abs(Math.log2(a.beats / b)) ? v : a);
 
-function freeOn(m) {
-  const fresh = FREE.held.size === 0;
-  if (fresh) {
-    const now = performance.now();
-    FREE.shown = [];
-    if (S.scroll) {
-      // Silence depuis le dernier relâchement (au plus une pause, même après une longue attente)
-      const gap = FREE.lastOff ? toBeats(now - FREE.lastOff) : 0;
-      if (S.durations && S.rests && FREE.seq.length && gap >= REST_MIN) FREE.seq.push({ rest: true, value: nearestValue(Math.min(gap, 4)) });
-      FREE.seq.push({ midis: FREE.shown, value: null, live: true });
-      if (FREE.seq.length > SEQ_MAX) FREE.seq.splice(0, FREE.seq.length - SEQ_MAX);
-    }
-    FREE.t0 = now;
-    setValue(S.durations ? VALUES[0] : null);
-    clearInterval(FREE.raf);
-    if (S.durations) FREE.raf = setInterval(growValue, 30);
-  }
-  FREE.held.add(m);
-  if (!FREE.shown.includes(m)) FREE.shown.push(m);
-  renderFree(fresh);
+const grand = () => S.grand;
+const voiceOf = m => grand() ? (m < S.split ? 'bass' : 'treble') : 'all';
+const voiceList = () => Object.values(FREE.voices);
+
+function resetVoices() {
+  FREE.layout = grand() ? 'grand' : 'single';
+  FREE.voices = grand() ? { treble: voice(), bass: voice() } : { all: voice() };
+  FREE.last = null;
+  clearInterval(FREE.raf);
+  FREE.raf = 0;
 }
 
-function setValue(v) {
-  FREE.value = v;
-  const cur = FREE.seq[FREE.seq.length - 1];
-  if (cur && !cur.rest && cur.live) cur.value = v;
+// Fin d'un élément : à son relâchement, ou à l'attaque suivante de la même voix si on le tient encore.
+function endEvent(e, now) {
+  e.live = false;
+  if (S.durations) e.value = nearestValue(toBeats(now - e.t));
+}
+
+function freeOn(m) {
+  const now = performance.now(), v = FREE.voices[voiceOf(m)];
+  let cur = v.cur, attack = false;
+  if (!cur || !cur.live || now - cur.t > GROUP_MS) {
+    if (cur?.live) endEvent(cur, now);
+    // Silence depuis que la voix s'est tue (au plus une pause, même après une longue attente)
+    if (S.durations && S.rests && !v.held.size && v.seq.length && v.lastOff) {
+      const gap = toBeats(now - v.lastOff);
+      if (gap >= REST_MIN) v.seq.push({ rest: true, t: v.lastOff, value: nearestValue(Math.min(gap, 4)) });
+    }
+    cur = v.cur = { midis: [], t: now, value: S.durations ? VALUES[0] : null, live: true };
+    v.seq.push(cur);
+    if (v.seq.length > SEQ_MAX) v.seq.splice(0, v.seq.length - SEQ_MAX);
+    attack = true;
+  }
+  v.held.add(m);
+  if (!cur.midis.includes(m)) cur.midis.push(m);
+  if (cur.midis.length >= 2) v.chord = cur;
+  FREE.last = cur;
+  if (S.durations && !FREE.raf) FREE.raf = setInterval(growValue, 30);
+  renderFree(attack && cur.midis.length === 1);
 }
 
 function growValue() {
-  const v = liveValue(heldBeats());
-  if (v !== FREE.value) { setValue(v); renderFree(false); }
+  const now = performance.now();
+  let changed = false, any = false;
+  for (const v of voiceList()) {
+    const c = v.cur;
+    if (!c?.live) continue;
+    any = true;
+    const val = liveValue(toBeats(now - c.t));
+    if (val !== c.value) { c.value = val; changed = true; }
+  }
+  if (!any) { clearInterval(FREE.raf); FREE.raf = 0; }
+  if (changed) renderFree(false);
 }
 
 function release(m) {
-  if (!FREE.held.delete(m) || FREE.held.size || !free()) return;
-  clearInterval(FREE.raf);
-  FREE.lastOff = performance.now();
-  if (S.durations && FREE.value) setValue(nearestValue(heldBeats()));
-  const cur = FREE.seq[FREE.seq.length - 1];
-  if (cur) cur.live = false;
+  if (!free()) return;
+  const v = FREE.voices[voiceOf(m)];
+  if (!v?.held.delete(m)) return;
+  const now = performance.now();
+  if (!v.held.size) v.lastOff = now;
+  if (v.cur?.live && !v.cur.midis.some(x => v.held.has(x))) endEvent(v.cur, now);
   renderFree(false);
 }
 
 function clearSeq() {
-  FREE.seq = [];
-  FREE.shown = [];
-  FREE.lastOff = 0;
+  for (const v of voiceList()) { v.seq = []; v.lastOff = 0; if (!v.held.size) v.cur = v.chord = null; }
+  if (!voiceList().some(v => v.cur)) FREE.last = null;
   renderFree(false);
 }
 
@@ -287,34 +311,70 @@ const ledgers = (clef, notes) => Math.max(...notes.map(n => {
   return p < 0 ? Math.floor(-p / 2) : Math.floor(Math.max(0, p - 8) / 2);
 }));
 
+// Ce qu'affiche une voix hors défilement : la dernière attaque, plus les notes encore tenues d'avant (en grisé).
+function sounding(v) {
+  if (!v.cur) return [];
+  const held = [...v.held].filter(m => !v.cur.midis.includes(m));
+  return [...v.cur.midis.map(m => fromMidi(m, S.spell)), ...held.map(m => Object.assign(fromMidi(m, S.spell), { held: true }))];
+}
+
+// Notes attaquées ensemble (toutes voix confondues) à l'instant t.
+const attackedAt = t => voiceList().flatMap(v => v.seq.filter(e => !e.rest && Math.abs(e.t - t) <= GROUP_MS).flatMap(e => e.midis));
+
+// Accord à nommer : celui qu'on vient de plaquer ; sinon un accord encore tenu (une mélodie jouée par-dessus ne le change pas).
+function harmony() {
+  if (!S.chords || !FREE.last) return null;
+  const now = attackedAt(FREE.last.t);
+  if (now.length >= 2) return { midis: now, held: false };
+  const held = voiceList().flatMap(v => v.chord && v.chord.midis.some(m => v.held.has(m)) ? v.chord.midis : []);
+  return held.length >= 2 ? { midis: held, held: true } : null;
+}
+
+// Largeur du cadre : sur un écran bas (téléphone en paysage), la portée a une hauteur imposée et on l'allonge pour
+// remplir la largeur ; une portée double, plus haute, s'élargit aussi sur grand écran pour ne pas pousser le clavier.
+function staffWidth(n) {
+  const w = staffSvg.clientWidth, h = staffSvg.clientHeight, H = systemHeight(n);
+  if (matchMedia('(max-height: 560px)').matches && h > 0) return Math.max(520, Math.round(w / h * H));
+  return n > 1 ? Math.min(916, Math.max(520, Math.round(w * 0.9))) : 520;
+}
+
 function renderFree(animate) {
-  const notes = FREE.shown.map(m => fromMidi(m, S.spell));
-  if (S.autoClef && notes.length) {
-    const other = FREE.clef === 'treble' ? 'bass' : 'treble';
-    // On change de clé dès 2 lignes supplémentaires si l'autre clé fait mieux (Do4 garde la clé en cours).
-    const cur = ledgers(FREE.clef, notes);
-    if (cur >= 2 && ledgers(other, notes) < cur) { FREE.clef = other; syncHeader(); }
+  if (FREE.layout !== (grand() ? 'grand' : 'single')) resetVoices();
+  const V = FREE.voices, last = FREE.last;
+  if (!grand() && S.autoClef) {
+    const notes = sounding(V.all);
+    if (notes.length) {
+      const other = FREE.clef === 'treble' ? 'bass' : 'treble';
+      // On change de clé dès 2 lignes supplémentaires si l'autre clé fait mieux (Do4 garde la clé en cours).
+      const cur = ledgers(FREE.clef, notes);
+      if (cur >= 2 && ledgers(other, notes) < cur) { FREE.clef = other; syncHeader(); }
+    }
   }
-  const value = S.durations ? FREE.value : null;
-  const chord = S.chords ? analyse(FREE.shown, S.notation, S.spell) : null;
+  const order = grand() ? [['treble', V.treble], ['bass', V.bass]] : [[FREE.clef, V.all]];
+  const h = harmony();
+  const chord = h ? analyse(h.midis, S.notation, S.spell) : null;
+  const n = order.length;
   if (S.scroll) {
     // Noms d'accords courts au-dessus de la partition (une seule notation pour gagner de la place)
     const nota = S.notation === 'both' ? 'fr' : S.notation;
-    const events = FREE.seq.map(e => e.rest ? e : {
-      notes: e.midis.map(m => fromMidi(m, S.spell)),
-      value: S.durations ? e.value : null,
-      live: e.live,
-      label: S.chords ? (a => a?.kind === 'chord' ? a.label : '')(analyse(e.midis, nota, S.spell)) : '',
-    });
-    // Écran bas (téléphone en paysage) : la portée a une hauteur imposée, on l'allonge pour remplir la largeur.
-    const short = matchMedia('(max-height: 560px)').matches && staffSvg.clientHeight > 0;
-    const width = short ? Math.max(520, Math.round(staffSvg.clientWidth / staffSvg.clientHeight * 210)) : 520;
-    renderSequence(staffSvg, { clef: FREE.clef, events, width });
-  } else renderStaff(staffSvg, { clef: FREE.clef, notes, value, label: chord?.label, labelKind: chord?.kind, animate });
-  $('#clearSeq').hidden = !(S.scroll && FREE.seq.length);
-  const sub = [chord?.desc, value?.name].filter(Boolean).join(' · ');
-  if (notes.length) setFeedback('', notes.slice().sort((a, b) => a.midi - b.midi).map(n => noteName(n, S.notation)).join(' · '), sub);
-  else setFeedback('hint', 'Jouez une note : elle s\'affiche sur la portée');
+    const label = e => S.chords ? (a => a?.kind === 'chord' ? a.label : '')(analyse(attackedAt(e.t), nota, S.spell)) : '';
+    const staves = order.map(([clef, v]) => ({
+      clef,
+      events: v.seq.map(e => e.rest ? e : {
+        t: e.t, notes: e.midis.map(m => fromMidi(m, S.spell)), value: S.durations ? e.value : null, live: e.live, label: label(e),
+      }),
+    }));
+    renderSequence(staffSvg, { staves, width: staffWidth(n), group: GROUP_MS });
+  } else {
+    const staves = order.map(([clef, v]) => ({ clef, notes: sounding(v), value: S.durations ? v.cur?.value : null }));
+    renderStaff(staffSvg, { staves, width: staffWidth(n), label: chord?.label, labelKind: chord?.kind, animate });
+  }
+  $('#clearSeq').hidden = !(S.scroll && voiceList().some(v => v.seq.length));
+  if (last) {
+    const names = attackedAt(last.t).sort((a, b) => a - b).map(m => noteName(fromMidi(m, S.spell), S.notation));
+    const sub = [h?.held ? chord?.label : '', chord?.desc, S.durations ? last.value?.name : ''].filter(Boolean).join(' · ');
+    setFeedback('', names.join(' · '), sub);
+  } else setFeedback('hint', grand() ? 'Jouez : chaque main a sa portée' : 'Jouez une note : elle s\'affiche sur la portée');
 }
 
 // ---------- métronome (mode libre) ----------
@@ -378,13 +438,12 @@ function renderMetro() {
 }
 
 function enterFree() {
-  if (!S.scroll) FREE.seq = [];
+  if (!S.scroll || FREE.layout !== (grand() ? 'grand' : 'single')) resetVoices();
   clearTimeout(pending);
   stopTimer();
   G = fresh();
   kb.clearMarks();
   FREE.clef = S.clef;
-  if (!S.durations) FREE.value = null;
   $('#overlay').classList.add('hide');
   $('#timer').classList.add('off');
   hud();
@@ -451,7 +510,11 @@ const CONTROLS = [
   { key: 'activity', label: 'Activité', opts: [['game', 'Jeu'], ['free', 'Libre']],
     hint: s => s.activity === 'free' ? 'La portée affiche simplement les notes jouées' : 'Une note s\'affiche : jouez-la' },
   { key: 'spell', label: 'Touches noires', opts: [['sharp', 'Dièses ♯'], ['flat', 'Bémols ♭']], show: s => !game(s) },
-  { key: 'autoClef', label: 'Changer de clé automatiquement', toggle: true, show: s => !game(s) },
+  { key: 'grand', label: 'Portée double (sol + fa, deux mains)', toggle: true, show: s => !game(s),
+    hint: s => s.grand ? 'Main gauche en clé de fa, main droite en clé de sol, chacune avec son rythme' : '' },
+  { key: 'split', label: 'Partage des mains : clé de sol à partir de', show: s => !game(s) && s.grand,
+    opts: s => [[55, 'Sol3', 'G3'], [60, 'Do4', 'C4'], [64, 'Mi4', 'E4']].map(([v, fr, en]) => [v, s.notation === 'en' ? en : fr]) },
+  { key: 'autoClef', label: 'Changer de clé automatiquement', toggle: true, show: s => !game(s) && !s.grand },
   { key: 'scroll', label: 'Notes à la suite (partition qui défile)', toggle: true, show: s => !game(s) },
   { key: 'rests', label: 'Silences entre les notes', toggle: true, show: s => !game(s) && s.scroll && s.durations },
   { key: 'chords', label: 'Nommer les accords et les intervalles', toggle: true, show: s => !game(s) },
@@ -489,10 +552,11 @@ function renderControls() {
     } else {
       row.className = 'row';
       const hint = c.hint?.(S);
-      row.innerHTML = `<div class="lbl">${c.label}</div><span class="seg">${c.opts.map(([v, t]) =>
-        `<button class="${S[c.key] === v ? 'on' : ''}" data-i="${c.opts.findIndex(o => o[0] === v)}">${t}</button>`).join('')}</span>
+      const opts = typeof c.opts === 'function' ? c.opts(S) : c.opts;
+      row.innerHTML = `<div class="lbl">${c.label}</div><span class="seg">${opts.map(([v, t], i) =>
+        `<button class="${S[c.key] === v ? 'on' : ''}" data-i="${i}">${t}</button>`).join('')}</span>
         ${hint ? `<div class="hint-t">${hint}</div>` : ''}`;
-      row.querySelectorAll('button').forEach(b => { b.onclick = () => set(c.key, c.opts[+b.dataset.i][0]); });
+      row.querySelectorAll('button').forEach(b => { b.onclick = () => set(c.key, opts[+b.dataset.i][0]); });
     }
     box.appendChild(row);
   }
@@ -536,6 +600,7 @@ function applyKbVisibility() {
 function syncHeader() {
   const clef = free() ? FREE.clef : S.clef;
   document.querySelectorAll('#clefSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === clef));
+  $('#clefSeg').hidden = free() && grand(); // portée double : les deux clés sont affichées
   document.querySelectorAll('#actSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === S.activity));
 }
 
@@ -599,7 +664,7 @@ $('#metreBtn').onclick = () => {
 };
 // Rotation du téléphone : la partition se recalcule à la nouvelle largeur.
 let resizeT = 0;
-window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (free() && S.scroll) renderFree(false); }, 150); });
+window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (free()) renderFree(false); }, 150); });
 $('#metroBtn').onclick = () => (METRO.on ? metroStop : metroStart)();
 // Tempo : − / + de 1 en 1. En maintenant appuyé, ça défile, puis passe de 5 en 5 après un moment.
 const TEMPO_MIN = 30, TEMPO_MAX = 240;

@@ -24,17 +24,38 @@ const RESTS = {
   s: ['𝄿', MID + 4 + 0.5 * REST_F],     // quart de soupir
 };
 
-function drawBase(svg, clef, vy, vh, w = VB_W) {
-  const x2 = w - 16;
+// Écart vertical entre la portée du haut (clé de sol) et celle du bas (clé de fa) d'une portée double.
+export const GRAND_DY = 160;
+export const systemHeight = n => 210 + (n - 1) * GRAND_DY;
+
+function drawStaffLines(parent, clef, w) {
+  const g = el('g', { class: 'staff' });
+  for (let i = 0; i < 5; i++) g.appendChild(el('line', { x1: 16, x2: w - 16, y1: TOP + i * SP, y2: TOP + i * SP }));
+  g.appendChild(el('line', { x1: 16, x2: 16, y1: TOP, y2: BOT }));
+  parent.appendChild(g);
+  // Positions calées sur la police Noto Music : la ligne de base des clés tombe sur la ligne du bas.
+  if (clef === 'treble') parent.appendChild(el('text', { class: 'clef', x: 26, y: BOT + 1, 'font-size': 68 }, '𝄞'));
+  else parent.appendChild(el('text', { class: 'clef', x: 30, y: TOP + SP * 3.5, 'font-size': 66 }, '𝄢'));
+}
+
+// Accolade du piano, dessinée à la hauteur du système.
+function bracePath(y0, y1) {
+  const h = y1 - y0, m = (y0 + y1) / 2;
+  return `M14 ${y0}C1 ${y0 + h * .1} 12 ${m - h * .2} 0 ${m}C12 ${m + h * .2} 1 ${y1 - h * .1} 14 ${y1}`
+    + `C6 ${y1 - h * .13} 17 ${m + h * .13} 3.5 ${m}C17 ${m - h * .13} 6 ${y0 + h * .13} 14 ${y0}Z`;
+}
+
+/** Une portée, ou plusieurs empilées (clés données de haut en bas) reliées par une accolade. */
+function drawBase(svg, clefs, vy, vh, w = VB_W) {
+  clefs = [].concat(clefs);
   svg.innerHTML = '';
   svg.setAttribute('viewBox', `0 ${vy} ${w} ${vh}`);
-  const g = el('g', { class: 'staff' });
-  for (let i = 0; i < 5; i++) g.appendChild(el('line', { x1: 16, x2, y1: TOP + i * SP, y2: TOP + i * SP }));
-  g.appendChild(el('line', { x1: 16, x2: 16, y1: TOP, y2: BOT }));
-  svg.appendChild(g);
-  // Positions calées sur la police Noto Music : la ligne de base des clés tombe sur la ligne du bas.
-  if (clef === 'treble') svg.appendChild(el('text', { class: 'clef', x: 26, y: BOT + 1, 'font-size': 68 }, '𝄞'));
-  else svg.appendChild(el('text', { class: 'clef', x: 30, y: TOP + SP * 3.5, 'font-size': 66 }, '𝄢'));
+  clefs.forEach((c, i) => drawStaffLines(i ? svg.appendChild(el('g', { transform: `translate(0 ${i * GRAND_DY})` })) : svg, c, w));
+  if (clefs.length > 1) {
+    const y1 = BOT + (clefs.length - 1) * GRAND_DY;
+    svg.appendChild(el('line', { class: 'system', x1: 16, x2: 16, y1: TOP, y2: y1 }));
+    svg.appendChild(el('path', { class: 'brace', d: bracePath(TOP, y1) }));
+  }
 }
 
 /** Géométrie d'un accord (ou d'une note) : sens de la hampe, décalages, étendue verticale et horizontale. */
@@ -82,21 +103,23 @@ function drawChord(parent, L, x) {
   for (let ly = TOP - SP; ly >= yHigh - 0.1; ly -= SP) parent.appendChild(el('line', { class: 'ledger', x1: lx1, x2: lx2, y1: ly, y2: ly }));
 
   const ax = x - 34 - (left ? W : 0) + (type === 'w' ? 0 : 3);
-  for (const [n, c] of L.accs) parent.appendChild(el('text', { class: 'acc', x: ax - c * 24, y: yOf(n), 'font-size': 60, 'text-anchor': 'middle' }, ACC[n.acc]));
+  for (const [n, c] of L.accs) parent.appendChild(el('text', { class: n.held ? 'acc held' : 'acc', x: ax - c * 24, y: yOf(n), 'font-size': 60, 'text-anchor': 'middle' }, ACC[n.acc]));
 
   const g = el('g', { class: 'note' });
   list.forEach((n, i) => {
     const hx = x + shift[i], y = yOf(n);
+    // Note encore tenue d'un accord précédent : dessinée en grisé, sous les notes qu'on vient de jouer.
+    const hg = n.held ? g.appendChild(el('g', { class: 'held' })) : g;
     if (type === 'w') {
-      g.appendChild(el('ellipse', { cx: hx, cy: y, rx: 12.5, ry: 8.2 }));
-      g.appendChild(el('ellipse', { class: 'hole', cx: hx, cy: y, rx: 5.2, ry: 6.6, transform: `rotate(-35 ${hx} ${y})` }));
+      hg.appendChild(el('ellipse', { cx: hx, cy: y, rx: 12.5, ry: 8.2 }));
+      hg.appendChild(el('ellipse', { class: 'hole', cx: hx, cy: y, rx: 5.2, ry: 6.6, transform: `rotate(-35 ${hx} ${y})` }));
     } else {
-      g.appendChild(el('ellipse', { cx: hx, cy: y, rx: 10.2, ry: 7.2, transform: `rotate(-22 ${hx} ${y})` }));
-      if (type === 'h') g.appendChild(el('ellipse', { class: 'hole', cx: hx, cy: y, rx: 7.6, ry: 3.2, transform: `rotate(-28 ${hx} ${y})` }));
+      hg.appendChild(el('ellipse', { cx: hx, cy: y, rx: 10.2, ry: 7.2, transform: `rotate(-22 ${hx} ${y})` }));
+      if (type === 'h') hg.appendChild(el('ellipse', { class: 'hole', cx: hx, cy: y, rx: 7.6, ry: 3.2, transform: `rotate(-28 ${hx} ${y})` }));
     }
     if (dot) {
       const onLine = (n.d - CLEFS[L.clef].bottom) % 2 === 0;
-      g.appendChild(el('circle', { cx: x + (right ? W : 0) + (type === 'w' ? 22 : 18), cy: onLine ? y - SP / 2 : y, r: 3 }));
+      hg.appendChild(el('circle', { cx: x + (right ? W : 0) + (type === 'w' ? 22 : 18), cy: onLine ? y - SP / 2 : y, r: 3 }));
     }
   });
   if (L.stem) {
@@ -119,32 +142,42 @@ function drawRest(parent, value, x) {
   parent.appendChild(g);
 }
 
+// Place un dessin dans la portée n° i d'un système (0 = celle du haut).
+const inStaff = (parent, i) => i ? parent.appendChild(el('g', { transform: `translate(0 ${i * GRAND_DY})` })) : parent;
+
 /**
  * Une note ou un accord, au centre de la portée.
  * @param {SVGSVGElement} svg
  * @param {{clef:'treble'|'bass', note?:object|null, notes?:object[], value?:{type:'w'|'h'|'q'|'e'|'s', dot?:boolean}|null,
+ *          staves?:{clef:string, notes:object[], value?:object|null}[], width?:number,
  *          label?:string, labelKind?:'chord'|'interval', state?:''|'ok'|'bad', animate?:boolean}} opts
  * notes : plusieurs notes empilées (accord). value : figure de note (ronde par défaut).
+ * staves : portée double, une entrée par portée de haut en bas (remplace clef, notes et value) ; width : largeur du cadre.
+ * Une note marquée held:true est dessinée en grisé (tenue depuis une attaque précédente).
  * label : nom d'accord ou d'intervalle, écrit au-dessus. Le cadre s'agrandit si des notes en sortent.
  */
-export function renderStaff(svg, { clef, note = null, notes = null, value = null, label = '', labelKind = 'chord', state = '', animate = false }) {
-  const list = notes || (note ? [note] : []);
-  const L = list.length ? layout(list, value, clef) : null;
-  let vy = 0, vh = 210, labelY = 0;
-  if (L) {
-    labelY = Math.min(TOP - 26, L.top - 16);
-    const yMin = label ? labelY - 30 : L.top - 24;
-    const yMax = L.bottom + 14;
+export function renderStaff(svg, { clef, note = null, notes = null, value = null, staves = null, width = VB_W,
+  label = '', labelKind = 'chord', state = '', animate = false }) {
+  staves = staves || [{ clef, notes: notes || (note ? [note] : []), value }];
+  const grand = staves.length > 1, w = grand ? width : VB_W, x = grand ? Math.round(w / 2 + 40) : NOTE_X;
+  const Ls = staves.map(s => s.notes?.length ? layout(s.notes, s.value, s.clef) : null);
+  let vy = 0, vh = systemHeight(staves.length), labelY = 0, top = Infinity, bottom = -Infinity;
+  Ls.forEach((L, i) => { if (L) { top = Math.min(top, L.top + i * GRAND_DY); bottom = Math.max(bottom, L.bottom + i * GRAND_DY); } });
+  const any = Ls.some(Boolean);
+  if (any) {
+    labelY = Math.min(TOP - 26, top - 16);
+    const yMin = label ? labelY - 30 : top - 24;
+    const yMax = bottom + 14;
     if (yMin < vy) { vh += vy - yMin; vy = yMin; }
     if (yMax > vy + vh) vh = yMax - vy;
   }
-  drawBase(svg, clef, vy, vh);
+  drawBase(svg, staves.map(s => s.clef), vy, vh, w);
   delete svg._seqOffset;
   svg.setAttribute('class', state ? 'state-' + state : '');
-  if (!L) return;
+  if (!any) return;
   const ng = el('g', { id: 'noteGroup', class: animate ? 'enter' : '' });
-  drawChord(ng, L, NOTE_X);
-  if (label) ng.appendChild(el('text', { class: 'chord-label ' + labelKind, x: NOTE_X, y: labelY, 'text-anchor': 'middle' }, label));
+  Ls.forEach((L, i) => L && drawChord(inStaff(ng, i), L, x));
+  if (label) ng.appendChild(el('text', { class: 'chord-label ' + labelKind, x, y: labelY, 'text-anchor': 'middle' }, label));
   svg.appendChild(ng);
 }
 
@@ -153,35 +186,54 @@ const SEQ_X0 = 112, GAP = 22;
 /**
  * Suite de notes et de silences qui défile vers la gauche : la dernière reste visible à droite.
  * @param {SVGSVGElement} svg
- * @param {{clef:'treble'|'bass', events:{rest?:boolean, notes?:object[], value?:object|null, label?:string, live?:boolean}[], width?:number}} opts
+ * @param {{staves:{clef:'treble'|'bass', events:{t:number, rest?:boolean, notes?:object[], value?:object|null, label?:string, live?:boolean}[]}[],
+ *          width?:number, group?:number}} opts
+ * staves : une portée, ou deux (portée double, de haut en bas) dont les éléments s'alignent dans le temps :
+ * les éléments attaqués à moins de `group` ms d'écart (t, en ms) partagent la même colonne.
+ * Une note longue d'une main reste ainsi sous les notes plus courtes de l'autre main.
  * width : largeur du cadre (plus large que d'habitude sur un écran en paysage, pour voir plus de notes).
  */
-export function renderSequence(svg, { clef, events, width = VB_W }) {
+export function renderSequence(svg, { staves, width = VB_W, group = 90 }) {
   const SEQ_RIGHT = width - 40;
-  // Placement horizontal : chaque élément prend la place de ses altérations, points, crochets et de son nom d'accord.
+  const all = [];
+  staves.forEach((s, si) => s.events.forEach(e => all.push({ e, si, L: e.rest ? null : layout(e.notes, e.value, s.clef) })));
+  all.sort((a, b) => a.e.t - b.e.t);
+  // Colonnes : un élément par portée au plus, attaqués ensemble.
+  const cols = [];
+  for (const it of all) {
+    let c = cols[cols.length - 1];
+    if (!c || it.e.t - c.t > group || c.items.some(o => o.si === it.si)) cols.push(c = { t: it.e.t, items: [] });
+    c.items.push(it);
+  }
+  // Placement horizontal : chaque colonne prend la place de ses altérations, points, crochets et de son nom d'accord.
   let x = SEQ_X0, prevR = 0;
-  const items = events.map((e, i) => {
-    const L = e.rest ? null : layout(e.notes, e.value, clef);
-    const lw = e.label ? e.label.length * 4.6 + 4 : 0; // demi-largeur approximative du nom d'accord
-    const wl = Math.max(L ? L.wl : 14, lw), wr = Math.max(L ? L.wr : (e.value?.dot ? 24 : 14), lw);
+  cols.forEach((c, i) => {
+    c.label = c.items.map(it => it.e.label).find(Boolean) || '';
+    const lw = c.label ? c.label.length * 4.6 + 4 : 0; // demi-largeur approximative du nom d'accord
+    const wl = Math.max(lw, ...c.items.map(it => it.L ? it.L.wl : 14));
+    const wr = Math.max(lw, ...c.items.map(it => it.L ? it.L.wr : (it.e.value?.dot ? 24 : 14)));
     if (i) x += prevR + GAP + wl;
     prevR = wr;
-    return { e, L, x };
+    c.x = x;
   });
-  const last = items[items.length - 1];
+  const last = cols[cols.length - 1];
   const offset = last ? Math.min(0, SEQ_RIGHT - last.x) : 0;
-  const visible = items.filter(it => it.x + offset > SEQ_X0 - 80);
+  const visible = cols.filter(c => c.x + offset > SEQ_X0 - 80);
 
-  // Cadre vertical : on l'agrandit pour les notes visibles qui sortent de la portée.
-  let top = TOP - 24, bottom = BOT + 14;
-  for (const it of visible) if (it.L) { top = Math.min(top, it.L.top - 6); bottom = Math.max(bottom, it.L.bottom + 4); }
-  const hasLabel = visible.some(it => it.e.label);
+  // Cadre vertical : on l'agrandit pour les notes visibles qui sortent du système.
+  const n = staves.length;
+  let top = TOP - 24, bottom = BOT + (n - 1) * GRAND_DY + 14;
+  for (const c of visible) for (const it of c.items) if (it.L) {
+    top = Math.min(top, it.L.top + it.si * GRAND_DY - 6);
+    bottom = Math.max(bottom, it.L.bottom + it.si * GRAND_DY + 4);
+  }
+  const hasLabel = visible.some(c => c.label);
   const labelY = Math.min(TOP - 26, top - 10);
-  let vy = 0, vh = 210;
+  let vy = 0, vh = systemHeight(n);
   const yMin = hasLabel ? labelY - 30 : top - 18, yMax = bottom + 10;
   if (yMin < vy) { vh += vy - yMin; vy = yMin; }
   if (yMax > vy + vh) vh = yMax - vy;
-  drawBase(svg, clef, vy, vh, width);
+  drawBase(svg, staves.map(s => s.clef), vy, vh, width);
   svg.setAttribute('class', 'seq');
 
   // Les éléments qui partent à gauche s'effacent en fondu avant d'atteindre la clé.
@@ -193,12 +245,13 @@ export function renderSequence(svg, { clef, events, width = VB_W }) {
   svg.appendChild(defs);
   const clip = el('g', { mask: 'url(#seqMask)' });
   const g = el('g', { class: 'seq-notes' });
-  for (const { e, L, x: ex } of visible) {
-    const eg = el('g', { class: e.live ? 'live' : '' });
-    if (e.rest) drawRest(eg, e.value, ex);
-    else drawChord(eg, L, ex);
-    if (e.label) eg.appendChild(el('text', { class: 'chord-label small', x: ex, y: labelY, 'text-anchor': 'middle' }, e.label));
-    g.appendChild(eg);
+  for (const c of visible) {
+    for (const { e, L, si } of c.items) {
+      const eg = inStaff(g, si).appendChild(el('g', { class: e.live ? 'live' : '' }));
+      if (e.rest) drawRest(eg, e.value, c.x);
+      else drawChord(eg, L, c.x);
+    }
+    if (c.label) g.appendChild(el('text', { class: 'chord-label small', x: c.x, y: labelY, 'text-anchor': 'middle' }, c.label));
   }
   clip.appendChild(g);
   svg.appendChild(clip);

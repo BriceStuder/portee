@@ -102,6 +102,9 @@ main { display: flex; flex-direction: column; align-items: center; justify-conte
 .sheet-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
 .chord-label.interval { font-size: 19px; font-weight: 500; font-style: italic; fill: var(--ink-soft) }
 .ledger { stroke: var(--line); stroke-width: 1.6 }
+.system { stroke: var(--line); stroke-width: 1.3 }
+.brace { fill: var(--ink) }
+.note .held, .acc.held { opacity: .32 }
 .state-ok .note, .state-ok .acc { fill: var(--ok) }
 .state-bad .note, .state-bad .acc { fill: var(--bad) }
 #noteGroup { transform-box: fill-box; transform-origin: center }
