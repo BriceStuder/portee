@@ -17,11 +17,13 @@ const LIVES = 3;
 const OK_DELAY = 450, BAD_DELAY = 1400; // pause (ms) avant la note suivante
 
 const DEFAULTS = {
-  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80, metre: '4/4', chords: true, wake: true, scroll: true, rests: true, grand: true, split: 60,
+  activity: 'game', spell: 'sharp', autoClef: true, durations: true, tempo: 80, metre: '4/4', chords: true, wake: true, scroll: true, rests: true, split: 60, dynamics: true,
   clef: 'treble', mode: 'series', seriesLength: 20, time: 5, kb: 'strict',
   names: true, notation: 'fr', accidentals: true, rare: false, range: 2, sound: true, hideKb: true, theme: null,
 };
 const S = { ...DEFAULTS, ...load('settings', {}) };
+// Ancien réglage « portée double » du mode libre : devenu le choix de clé « les deux ».
+if ('grand' in S) { if (S.grand && S.activity === 'free') S.clef = 'both'; delete S.grand; }
 let stats = load('stats', {});
 let best = load('best', {});
 
@@ -38,20 +40,21 @@ let raf = 0, pending = 0, t0 = 0;
 const infinite = () => S.mode === 'infinite';
 const free = () => S.activity === 'free';
 const fmtSec = ms => (ms / 1000).toFixed(1).replace('.', ',') + ' s';
-const statKey = n => `${S.clef}:${n.d}:${n.acc}`;
+const clefs = () => S.clef === 'both' ? ['treble', 'bass'] : [S.clef];
+const statKey = n => `${n.clef || S.clef}:${n.d}:${n.acc}`;
 const bestKey = () => [S.clef, S.kb, S.accidentals, S.rare, S.range].join('|');
 
 // ---------- tirage ----------
 function pickNote() {
-  const [lo, hi] = noteRange(S.clef, S.range);
   const accs = S.accidentals ? [[0, 1 - ACC_RATIO], [1, ACC_RATIO / 2], [-1, ACC_RATIO / 2]] : [[0, 1]];
   const same = (a, b) => S.kb === 'simple' ? a.midi % 12 === b.midi % 12 : a.midi === b.midi;
   const cands = [];
-  for (let d = lo; d <= hi; d++) {
+  // Portée double : chaque note est tirée sur l'une des deux clés (une même note peut tomber sur les deux).
+  for (const clef of clefs()) for (let d = noteRange(clef, S.range)[0]; d <= noteRange(clef, S.range)[1]; d++) {
     for (const [a, w] of accs) {
-      const n = makeNote(d, a);
+      const n = Object.assign(makeNote(d, a), { clef });
       if (!S.rare && isRare(n)) continue;
-      if (G.note && same(n, G.note)) continue; // jamais deux fois la même touche de suite
+      if (G.note && same(n, G.note) && n.clef === G.note.clef) continue; // jamais deux fois la même note de suite
       // Révision adaptative : les notes souvent ratées reviennent plus souvent.
       const st = stats[statKey(n)];
       const err = st && st.n >= 2 ? 1 - st.ok / st.n : 0;
@@ -92,6 +95,13 @@ function startTimer(sec) {
 }
 const stopTimer = () => cancelAnimationFrame(raf);
 
+// Portée du jeu : une clé, ou les deux (la note sur la portée de sa clé).
+function drawGame(n = null, opts = {}) {
+  if (S.clef !== 'both') { renderStaff(staffSvg, { clef: S.clef, note: n, ...opts }); return; }
+  const staves = ['treble', 'bass'].map(clef => ({ clef, notes: n && n.clef === clef ? [n] : [] }));
+  renderStaff(staffSvg, { staves, width: staffWidth(2), ...opts });
+}
+
 // ---------- déroulement ----------
 function start() {
   clearTimeout(pending);
@@ -106,15 +116,15 @@ function nextNote() {
   G.lock = false;
   kb.clearMarks();
   G.note = pickNote();
-  renderStaff(staffSvg, { clef: S.clef, note: G.note, animate: true });
+  drawGame(G.note, { animate: true });
   setFeedback('');
   hud();
   startTimer(infinite() ? G.speed : S.time);
 }
 
-function press(m, src) {
+function press(m, src, vel = 0) {
   if (src !== 'midi' && S.sound) playNote(m); // le piano MIDI produit déjà son propre son
-  if (free()) { freeOn(m); return; }
+  if (free()) { freeOn(m, vel); return; }
   if ($('#drawer').classList.contains('open')) return;
   if (G.phase === 'playing') { if (!G.lock) evaluate(m); }
   else if (G.phase === 'idle') start();
@@ -149,7 +159,7 @@ function resolve(ok, pressed) {
     const alt = enharmonic(n);
     setFeedback('bad', pressed == null ? `Temps écoulé — c'était ${name}` : `C'était ${name}`, alt ? `(ou ${noteName(alt, S.notation)})` : '');
   }
-  renderStaff(staffSvg, { clef: S.clef, note: n, state: ok ? 'ok' : 'bad' });
+  drawGame(n, { state: ok ? 'ok' : 'bad' });
   G.idx++;
   hud();
   const over = infinite() ? G.lives <= 0 : G.idx >= S.seriesLength;
@@ -161,7 +171,7 @@ function end() {
   G.endedAt = performance.now();
   stopTimer();
   kb.clearMarks();
-  renderStaff(staffSvg, { clef: S.clef });
+  drawGame();
   setFeedback('');
   $('#timer').classList.add('off');
 
@@ -193,7 +203,7 @@ function stopGame() {
   stopTimer();
   G = fresh();
   kb.clearMarks();
-  renderStaff(staffSvg, { clef: S.clef });
+  drawGame();
   setFeedback('');
   $('#timer').classList.add('off');
   const desc = infinite()
@@ -234,7 +244,16 @@ const liveValue = b => VALUES.filter(v => v.beats <= b).pop() || VALUES[0];
 // À la fin : figure la plus proche (à l'échelle logarithmique, comme l'oreille).
 const nearestValue = b => VALUES.reduce((a, v) => Math.abs(Math.log2(v.beats / b)) < Math.abs(Math.log2(a.beats / b)) ? v : a);
 
-const grand = () => S.grand;
+const grand = () => S.clef === 'both';
+
+// Nuances d'après la force de frappe (vélocité MIDI 1–127), avec les glyphes de la police Noto Music.
+// Le clavier à l'écran n'a pas de vélocité : pas de nuance.
+const DYNAMICS = [[25, 'ppp', '𝆏𝆏𝆏'], [41, 'pp', '𝆏𝆏'], [57, 'p', '𝆏'], [72, 'mp', '𝆐𝆏'], [88, 'mf', '𝆐𝆑'], [104, 'f', '𝆑'], [120, 'ff', '𝆑𝆑'], [128, 'fff', '𝆑𝆑𝆑']];
+const dynOf = vel => {
+  if (!S.dynamics || !vel) return null;
+  const [, name, sym] = DYNAMICS.find(d => vel < d[0]);
+  return { name, sym };
+};
 const voiceOf = m => grand() ? (m < S.split ? 'bass' : 'treble') : 'all';
 const voiceList = () => Object.values(FREE.voices);
 
@@ -252,7 +271,7 @@ function endEvent(e, now) {
   if (S.durations) e.value = nearestValue(toBeats(now - e.t));
 }
 
-function freeOn(m) {
+function freeOn(m, vel = 0) {
   const now = performance.now(), v = FREE.voices[voiceOf(m)];
   let cur = v.cur, attack = false;
   if (!cur || !cur.live || now - cur.t > GROUP_MS) {
@@ -262,13 +281,14 @@ function freeOn(m) {
       const gap = toBeats(now - v.lastOff);
       if (gap >= REST_MIN) v.seq.push({ rest: true, t: v.lastOff, value: nearestValue(Math.min(gap, 4)) });
     }
-    cur = v.cur = { midis: [], t: now, value: S.durations ? VALUES[0] : null, live: true };
+    cur = v.cur = { midis: [], t: now, value: S.durations ? VALUES[0] : null, vel: 0, live: true };
     v.seq.push(cur);
     if (v.seq.length > SEQ_MAX) v.seq.splice(0, v.seq.length - SEQ_MAX);
     attack = true;
   }
   v.held.add(m);
   if (!cur.midis.includes(m)) cur.midis.push(m);
+  cur.vel = Math.max(cur.vel, vel); // accord : la note la plus forte donne la nuance
   if (cur.midis.length >= 2) v.chord = cur;
   FREE.last = cur;
   if (S.durations && !FREE.raf) FREE.raf = setInterval(growValue, 30);
@@ -358,21 +378,28 @@ function renderFree(animate) {
     // Noms d'accords courts au-dessus de la partition (une seule notation pour gagner de la place)
     const nota = S.notation === 'both' ? 'fr' : S.notation;
     const label = e => S.chords ? (a => a?.kind === 'chord' ? a.label : '')(analyse(attackedAt(e.t), nota, S.spell)) : '';
-    const staves = order.map(([clef, v]) => ({
-      clef,
-      events: v.seq.map(e => e.rest ? e : {
-        t: e.t, notes: e.midis.map(m => fromMidi(m, S.spell)), value: S.durations ? e.value : null, live: e.live, label: label(e),
-      }),
-    }));
+    // Comme sur une partition, la nuance n'est écrite que lorsqu'elle change.
+    const staves = order.map(([clef, v]) => {
+      let prev = '';
+      return {
+        clef,
+        events: v.seq.map(e => {
+          if (e.rest) return e;
+          const d = dynOf(e.vel)?.sym || '', dyn = d !== prev ? d : '';
+          if (d) prev = d;
+          return { t: e.t, notes: e.midis.map(m => fromMidi(m, S.spell)), value: S.durations ? e.value : null, live: e.live, label: label(e), dyn };
+        }),
+      };
+    });
     renderSequence(staffSvg, { staves, width: staffWidth(n), group: GROUP_MS });
   } else {
-    const staves = order.map(([clef, v]) => ({ clef, notes: sounding(v), value: S.durations ? v.cur?.value : null }));
+    const staves = order.map(([clef, v]) => ({ clef, notes: sounding(v), value: S.durations ? v.cur?.value : null, dyn: dynOf(v.cur?.vel)?.sym }));
     renderStaff(staffSvg, { staves, width: staffWidth(n), label: chord?.label, labelKind: chord?.kind, animate });
   }
   $('#clearSeq').hidden = !(S.scroll && voiceList().some(v => v.seq.length));
   if (last) {
     const names = attackedAt(last.t).sort((a, b) => a - b).map(m => noteName(fromMidi(m, S.spell), S.notation));
-    const sub = [h?.held ? chord?.label : '', chord?.desc, S.durations ? last.value?.name : ''].filter(Boolean).join(' · ');
+    const sub = [h?.held ? chord?.label : '', chord?.desc, S.durations ? last.value?.name : '', dynOf(last.vel)?.name].filter(Boolean).join(' · ');
     setFeedback('', names.join(' · '), sub);
   } else setFeedback('hint', grand() ? 'Jouez : chaque main a sa portée' : 'Jouez une note : elle s\'affiche sur la portée');
 }
@@ -443,7 +470,7 @@ function enterFree() {
   stopTimer();
   G = fresh();
   kb.clearMarks();
-  FREE.clef = S.clef;
+  FREE.clef = S.clef === 'both' ? 'treble' : S.clef;
   $('#overlay').classList.add('hide');
   $('#timer').classList.add('off');
   hud();
@@ -497,7 +524,8 @@ function renderHead() {
 }
 
 function buildKeyboard() {
-  const [lo, hi] = keyboardRange(S.clef, S.range, S.accidentals);
+  const rs = clefs().map(c => keyboardRange(c, S.range, S.accidentals));
+  const lo = Math.min(...rs.map(r => r[0])), hi = Math.max(...rs.map(r => r[1]));
   kb.build({ lo, hi, simple: S.kb === 'simple', names: S.names, notation: S.notation });
   const oct = m => Math.floor(m / 12) - 1;
   const nm = m => (S.notation === 'en' ? LETTERS_EN : LETTERS_FR)[[0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6][m % 12]];
@@ -510,14 +538,15 @@ const CONTROLS = [
   { key: 'activity', label: 'Activité', opts: [['game', 'Jeu'], ['free', 'Libre']],
     hint: s => s.activity === 'free' ? 'La portée affiche simplement les notes jouées' : 'Une note s\'affiche : jouez-la' },
   { key: 'spell', label: 'Touches noires', opts: [['sharp', 'Dièses ♯'], ['flat', 'Bémols ♭']], show: s => !game(s) },
-  { key: 'grand', label: 'Portée double (sol + fa, deux mains)', toggle: true, show: s => !game(s),
-    hint: s => s.grand ? 'Main gauche en clé de fa, main droite en clé de sol, chacune avec son rythme' : '' },
-  { key: 'split', label: 'Partage des mains : clé de sol à partir de', show: s => !game(s) && s.grand,
+  { key: 'split', label: 'Partage des mains : clé de sol à partir de', show: s => !game(s) && s.clef === 'both',
+    hint: () => 'Portée double (𝄞𝄢 en haut) : chaque main a sa portée et son rythme',
     opts: s => [[55, 'Sol3', 'G3'], [60, 'Do4', 'C4'], [64, 'Mi4', 'E4']].map(([v, fr, en]) => [v, s.notation === 'en' ? en : fr]) },
-  { key: 'autoClef', label: 'Changer de clé automatiquement', toggle: true, show: s => !game(s) && !s.grand },
+  { key: 'autoClef', label: 'Changer de clé automatiquement', toggle: true, show: s => !game(s) && s.clef !== 'both' },
   { key: 'scroll', label: 'Notes à la suite (partition qui défile)', toggle: true, show: s => !game(s) },
   { key: 'rests', label: 'Silences entre les notes', toggle: true, show: s => !game(s) && s.scroll && s.durations },
   { key: 'chords', label: 'Nommer les accords et les intervalles', toggle: true, show: s => !game(s) },
+  { key: 'dynamics', label: 'Nuances (p, mf, f…) d\'après la force de frappe', toggle: true, show: s => !game(s),
+    hint: s => s.dynamics ? 'Avec le piano MIDI seulement : le clavier à l\'écran n\'a pas de force de frappe' : '' },
   { key: 'durations', label: 'Durée des notes (ronde, blanche, noire…)', toggle: true, show: s => !game(s),
     hint: s => s.durations ? 'Tempo et métronome : boutons « − ♩ = 80 + » en haut' : '' },
   { key: 'metre', label: 'Mesure du métronome', opts: [['2/4', '2/4'], ['3/4', '3/4'], ['4/4', '4/4'], ['5/4', '5/4'], ['6/8', '6/8']],
@@ -563,15 +592,15 @@ function renderControls() {
 }
 
 function renderStats() {
-  $('#statsClef').textContent = S.clef === 'treble' ? '· clé de sol' : '· clé de fa';
+  $('#statsClef').textContent = { treble: '· clé de sol', bass: '· clé de fa', both: '· clés de sol et de fa' }[S.clef];
   const rows = Object.entries(stats)
-    .filter(([k, v]) => k.startsWith(S.clef + ':') && v.n >= 3)
-    .map(([k, v]) => { const [, d, a] = k.split(':').map(Number); return { n: makeNote(d, a), rate: v.ok / v.n, cnt: v.n }; })
+    .filter(([k, v]) => clefs().includes(k.split(':')[0]) && v.n >= 3)
+    .map(([k, v]) => { const [c, d, a] = k.split(':'); return { n: makeNote(+d, +a), clef: c, rate: v.ok / v.n, cnt: v.n }; })
     .filter(r => r.rate < 1)
     .sort((a, b) => a.rate - b.rate)
     .slice(0, 8);
   $('#statsList').innerHTML = rows.length
-    ? rows.map(r => `<div class="statline"><span>${noteName(r.n, S.notation === 'both' ? 'fr' : S.notation)}</span>
+    ? rows.map(r => `<div class="statline"><span>${noteName(r.n, S.notation === 'both' ? 'fr' : S.notation)}${S.clef === 'both' ? ` <span class="g">${r.clef === 'treble' ? '𝄞' : '𝄢'}</span>` : ''}</span>
         <span class="bar"><i style="width:${Math.round(r.rate * 100)}%"></i></span><span class="pct">${Math.round(r.rate * 100)} %</span></div>`).join('')
     : '<div class="hint-t">Pas encore assez de données : jouez quelques séries.</div>';
 }
@@ -598,9 +627,8 @@ function applyKbVisibility() {
 }
 
 function syncHeader() {
-  const clef = free() ? FREE.clef : S.clef;
+  const clef = free() && !grand() ? FREE.clef : S.clef;
   document.querySelectorAll('#clefSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === clef));
-  $('#clefSeg').hidden = free() && grand(); // portée double : les deux clés sont affichées
   document.querySelectorAll('#actSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === S.activity));
 }
 
@@ -648,7 +676,7 @@ $('#clefSeg').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.dataset.v !== S.clef) set('clef', b.dataset.v);
-  else if (free() && FREE.clef !== S.clef) enterFree();
+  else if (free() && !grand() && FREE.clef !== S.clef) enterFree();
 });
 $('#clearSeq').onclick = clearSeq;
 // Mesure : chaque appui passe à la suivante. Le métronome repart sur un premier temps.
@@ -751,7 +779,7 @@ window.addEventListener('keyup', e => {
 });
 
 initMidi({
-  onNoteOn: n => { kb.down(n); press(n, 'midi'); },
+  onNoteOn: (n, v) => { kb.down(n); press(n, 'midi', v); },
   onNoteOff: n => { kb.up(n); release(n); },
   onStatus: s => { Object.assign(midi, { names: [], denied: false }, s); renderMidi(); },
 });
@@ -760,7 +788,7 @@ initMidi({
 applyTheme();
 renderMidi();
 refreshAll();
-document.fonts?.ready.then(() => { if (free()) renderFree(false); else if (G.phase !== 'playing') renderStaff(staffSvg, { clef: S.clef }); });
+document.fonts?.ready.then(() => { if (free()) renderFree(false); else if (G.phase !== 'playing') drawGame(); });
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

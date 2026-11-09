@@ -1,7 +1,7 @@
 // Entrée Web MIDI : écoute tous les claviers branchés (ex. Kawai ES60 en USB).
 
 /**
- * @param {{onNoteOn:(n:number)=>void, onNoteOff:(n:number)=>void, onStatus:(s:{supported:boolean, denied?:boolean, names?:string[]})=>void}} cb
+ * @param {{onNoteOn:(n:number, velocity:number)=>void, onNoteOff:(n:number)=>void, onStatus:(s:{supported:boolean, denied?:boolean, names?:string[]})=>void}} cb
  */
 export async function initMidi({ onNoteOn, onNoteOff, onStatus }) {
   if (!navigator.requestMIDIAccess) { onStatus({ supported: false }); return; }
@@ -15,7 +15,7 @@ export async function initMidi({ onNoteOn, onNoteOff, onStatus }) {
   const handle = e => {
     const [st, note, vel] = e.data;
     const cmd = st & 0xf0;
-    if (cmd === 0x90 && vel > 0) onNoteOn(note);
+    if (cmd === 0x90 && vel > 0) onNoteOn(note, vel);
     else if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) onNoteOff(note);
   };
   const bind = () => {

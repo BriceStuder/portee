@@ -153,6 +153,7 @@ const inStaff = (parent, i) => i ? parent.appendChild(el('g', { transform: `tran
  *          label?:string, labelKind?:'chord'|'interval', state?:''|'ok'|'bad', animate?:boolean}} opts
  * notes : plusieurs notes empilées (accord). value : figure de note (ronde par défaut).
  * staves : portée double, une entrée par portée de haut en bas (remplace clef, notes et value) ; width : largeur du cadre.
+ * staves[i].dyn : nuance à écrire sous les notes de cette portée (glyphes Noto Music).
  * Une note marquée held:true est dessinée en grisé (tenue depuis une attaque précédente).
  * label : nom d'accord ou d'intervalle, écrit au-dessus. Le cadre s'agrandit si des notes en sortent.
  */
@@ -162,7 +163,11 @@ export function renderStaff(svg, { clef, note = null, notes = null, value = null
   const grand = staves.length > 1, w = grand ? width : VB_W, x = grand ? Math.round(w / 2 + 40) : NOTE_X;
   const Ls = staves.map(s => s.notes?.length ? layout(s.notes, s.value, s.clef) : null);
   let vy = 0, vh = systemHeight(staves.length), labelY = 0, top = Infinity, bottom = -Infinity;
-  Ls.forEach((L, i) => { if (L) { top = Math.min(top, L.top + i * GRAND_DY); bottom = Math.max(bottom, L.bottom + i * GRAND_DY); } });
+  Ls.forEach((L, i) => {
+    if (!L) return;
+    top = Math.min(top, L.top + i * GRAND_DY);
+    bottom = Math.max(bottom, (staves[i].dyn ? dynY(L, i, staves.length) + 6 : L.bottom) + i * GRAND_DY);
+  });
   const any = Ls.some(Boolean);
   if (any) {
     labelY = Math.min(TOP - 26, top - 16);
@@ -176,17 +181,31 @@ export function renderStaff(svg, { clef, note = null, notes = null, value = null
   svg.setAttribute('class', state ? 'state-' + state : '');
   if (!any) return;
   const ng = el('g', { id: 'noteGroup', class: animate ? 'enter' : '' });
-  Ls.forEach((L, i) => L && drawChord(inStaff(ng, i), L, x));
+  Ls.forEach((L, i) => {
+    if (!L) return;
+    const sg = inStaff(ng, i);
+    drawChord(sg, L, x);
+    if (staves[i].dyn) drawDyn(sg, x, dynY(L, i, staves.length), staves[i].dyn);
+  });
   if (label) ng.appendChild(el('text', { class: 'chord-label ' + labelKind, x, y: labelY, 'text-anchor': 'middle' }, label));
   svg.appendChild(ng);
 }
 
 const SEQ_X0 = 112, GAP = 22;
 
+// Nuance (p, mf, f…) sous les notes : en dessous de la portée, ou sous la note la plus basse si elle en sort.
+// Dans une portée double, celle du haut se place entre les deux portées.
+const DYN_F = 34;
+const dynY = (L, si, n) => {
+  const y = Math.max(BOT + 30, (L ? L.bottom : BOT) + 26);
+  return si < n - 1 ? Math.min(y, TOP + GRAND_DY - 12) : y;
+};
+const drawDyn = (parent, x, y, sym) => parent.appendChild(el('text', { class: 'dyn', x, y, 'font-size': DYN_F, 'text-anchor': 'middle' }, sym));
+
 /**
  * Suite de notes et de silences qui défile vers la gauche : la dernière reste visible à droite.
  * @param {SVGSVGElement} svg
- * @param {{staves:{clef:'treble'|'bass', events:{t:number, rest?:boolean, notes?:object[], value?:object|null, label?:string, live?:boolean}[]}[],
+ * @param {{staves:{clef:'treble'|'bass', events:{t:number, rest?:boolean, notes?:object[], value?:object|null, label?:string, dyn?:string, live?:boolean}[]}[],
  *          width?:number, group?:number}} opts
  * staves : une portée, ou deux (portée double, de haut en bas) dont les éléments s'alignent dans le temps :
  * les éléments attaqués à moins de `group` ms d'écart (t, en ms) partagent la même colonne.
@@ -209,7 +228,8 @@ export function renderSequence(svg, { staves, width = VB_W, group = 90 }) {
   let x = SEQ_X0, prevR = 0;
   cols.forEach((c, i) => {
     c.label = c.items.map(it => it.e.label).find(Boolean) || '';
-    const lw = c.label ? c.label.length * 4.6 + 4 : 0; // demi-largeur approximative du nom d'accord
+    const lw = Math.max(c.label ? c.label.length * 4.6 + 4 : 0, // demi-largeur approximative du nom d'accord
+      ...c.items.map(it => it.e.dyn ? [...it.e.dyn].length * 7 + 4 : 0)); // … et de la nuance
     const wl = Math.max(lw, ...c.items.map(it => it.L ? it.L.wl : 14));
     const wr = Math.max(lw, ...c.items.map(it => it.L ? it.L.wr : (it.e.value?.dot ? 24 : 14)));
     if (i) x += prevR + GAP + wl;
@@ -225,7 +245,7 @@ export function renderSequence(svg, { staves, width = VB_W, group = 90 }) {
   let top = TOP - 24, bottom = BOT + (n - 1) * GRAND_DY + 14;
   for (const c of visible) for (const it of c.items) if (it.L) {
     top = Math.min(top, it.L.top + it.si * GRAND_DY - 6);
-    bottom = Math.max(bottom, it.L.bottom + it.si * GRAND_DY + 4);
+    bottom = Math.max(bottom, (it.e.dyn ? dynY(it.L, it.si, n) + 6 : it.L.bottom + 4) + it.si * GRAND_DY);
   }
   const hasLabel = visible.some(c => c.label);
   const labelY = Math.min(TOP - 26, top - 10);
@@ -250,6 +270,7 @@ export function renderSequence(svg, { staves, width = VB_W, group = 90 }) {
       const eg = inStaff(g, si).appendChild(el('g', { class: e.live ? 'live' : '' }));
       if (e.rest) drawRest(eg, e.value, c.x);
       else drawChord(eg, L, c.x);
+      if (e.dyn) drawDyn(eg, c.x, dynY(L, si, n), e.dyn);
     }
     if (c.label) g.appendChild(el('text', { class: 'chord-label small', x: c.x, y: labelY, 'text-anchor': 'middle' }, c.label));
   }
