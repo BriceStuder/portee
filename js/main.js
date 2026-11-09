@@ -248,7 +248,8 @@ const grand = () => S.clef === 'both';
 
 // Nuances d'après la force de frappe (vélocité MIDI 1–127), avec les glyphes de la police Noto Music.
 // Le clavier à l'écran n'a pas de vélocité : pas de nuance.
-const DYNAMICS = [[25, 'ppp', '𝆏𝆏𝆏'], [41, 'pp', '𝆏𝆏'], [57, 'p', '𝆏'], [72, 'mp', '𝆐𝆏'], [88, 'mf', '𝆐𝆑'], [104, 'f', '𝆑'], [120, 'ff', '𝆑𝆑'], [128, 'fff', '𝆑𝆑𝆑']];
+// Seuils abaissés pour le toucher du Kawai ES60, qui envoie des vélocités plutôt basses.
+const DYNAMICS = [[16, 'ppp', '𝆏𝆏𝆏'], [30, 'pp', '𝆏𝆏'], [44, 'p', '𝆏'], [60, 'mp', '𝆐𝆏'], [78, 'mf', '𝆐𝆑'], [96, 'f', '𝆑'], [114, 'ff', '𝆑𝆑'], [128, 'fff', '𝆑𝆑𝆑']];
 const dynOf = vel => {
   if (!S.dynamics || !vel) return null;
   const [, name, sym] = DYNAMICS.find(d => vel < d[0]);
