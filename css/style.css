@@ -29,7 +29,9 @@ html, body { margin: 0; min-height: 100% }
 body {
   background: radial-gradient(1200px 600px at 50% 0%, var(--bg2), var(--bg)) fixed, var(--bg);
   color: var(--ink); font-family: Inter, system-ui, sans-serif;
-  display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); min-height: 100vh; min-height: 100dvh;
+  /* Tout tient dans la hauteur de l'écran, sans défilement : la partition prend la place qui reste. */
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr);
+  height: 100vh; height: 100dvh; overflow: hidden;
   transition: background .3s, color .3s;
   -webkit-tap-highlight-color: transparent;
 }
@@ -46,7 +48,7 @@ header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; flex
 .seg button .g { font-family: "Noto Music"; font-size: 18px; line-height: 1 }
 .seg button.on { background: var(--ui-active); color: var(--ui-active-text) }
 .seg button:focus-visible, .icon-btn:focus-visible, .tg:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
-.pill { display: inline-flex; align-items: center; gap: 8px; background: var(--ui); border: 1px solid var(--ui-border); border-radius: 999px; padding: 6px 12px; font-size: 13px }
+.pill { white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; background: var(--ui); border: 1px solid var(--ui-border); border-radius: 999px; padding: 6px 12px; font-size: 13px }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-soft); opacity: .5 }
 .metro-box { padding: 2px; gap: 0 }
 .metro-box button { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center }
@@ -74,10 +76,11 @@ header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; flex
 .icon-btn svg { width: 18px; height: 18px }
 
 /* ---------- zone partition ---------- */
-main { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8px 24px 24px; gap: 18px }
+main { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8px 24px 24px; gap: 18px; min-height: 0 }
 .sheet {
   width: min(760px, 100%); background: var(--paper); border-radius: 14px; box-shadow: var(--shadow);
   border: 1px solid var(--paper-edge); position: relative; overflow: hidden;
+  flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column;
 }
 .sheet::before {
   content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .35; mix-blend-mode: multiply;
@@ -86,7 +89,7 @@ main { display: flex; flex-direction: column; align-items: center; justify-conte
 :root[data-theme="dark"] .sheet::before { opacity: .12; mix-blend-mode: screen }
 .sheet-head { display: flex; justify-content: space-between; gap: 12px; padding: 14px 20px 0; font-size: 12px; color: var(--ink-soft); letter-spacing: .04em }
 .sheet-head span:first-child { text-transform: uppercase }
-.sheet svg { display: block; width: 100%; height: auto }
+.sheet svg { display: block; width: 100%; height: auto; flex: 0 1 auto; min-height: 0 } /* rétrécit s'il manque de la hauteur */
 .staff line { stroke: var(--line); stroke-width: 1.3 }
 .clef { font-family: "Noto Music"; fill: var(--ink) }
 .note { fill: var(--ink); transition: fill .2s }
@@ -163,6 +166,9 @@ main { display: flex; flex-direction: column; align-items: center; justify-conte
 .piano-top .brandmark { font-family: Fraunces, serif; letter-spacing: .3em; color: #a39b8a }
 .keys-wrap { width: 100%; min-width: 0; max-width: 1200px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: #444 transparent }
 .keys-wrap.simple { max-width: 760px }
+/* clavier plafonné à environ un tiers de la hauteur : on réduit sa largeur plutôt que de le couper */
+.keys-wrap { max-width: min(1200px, calc(34dvh * var(--kb-ratio, 6))) }
+.keys-wrap.simple { max-width: min(760px, calc(34dvh * var(--kb-ratio, 6))) }
 .felt { height: 5px; background: linear-gradient(180deg, var(--felt1), var(--felt2)); position: sticky; left: 0; min-width: 100% }
 .keys { display: block; width: 100%; height: auto; touch-action: none; user-select: none }
 .wk { fill: url(#gWhite); stroke: var(--wk-stroke); stroke-width: 1; cursor: pointer; transition: fill .15s }
@@ -210,9 +216,13 @@ main { display: flex; flex-direction: column; align-items: center; justify-conte
 .statline .pct { text-align: right; color: var(--ink-soft); font-variant-numeric: tabular-nums }
 .link-btn { background: none; border: 0; padding: 0; margin-top: 10px; color: var(--ink-soft); font-size: 12px; text-decoration: underline; cursor: pointer }
 
+/* tablette : le logo seul, pour que la barre du haut tienne sur une ligne */
+@media (max-width: 1180px) {
+  .brand { font-size: 0; gap: 0 }
+  header { gap: 12px }
+}
 @media (max-width: 700px) {
   header { padding: 12px 16px; gap: 10px }
-  .brand { font-size: 20px }
   main { padding: 8px 16px 16px; gap: 12px }
   .piano { padding: 12px 8px 0 }
   .hide-sm { display: none !important }
@@ -231,17 +241,26 @@ main { display: flex; flex-direction: column; align-items: center; justify-conte
 }
 
 /* clavier masqué (piano MIDI branché) : partition agrandie */
-body.no-kb { grid-template-rows: auto 1fr }
+body.no-kb { grid-template-rows: auto minmax(0, 1fr) }
 body.no-kb .sheet, body.no-kb .timer { width: min(1000px, 100%) }
 body.no-kb .feedback { font-size: 26px }
+
+/* tablette en paysage, petit portable : marges resserrées pour laisser de la place à la partition */
+@media (max-height: 760px) {
+  main { padding: 4px 24px 10px; gap: 10px }
+  .piano { padding-top: 10px }
+  .piano-top { padding-bottom: 6px }
+  .overlay { gap: 6px; padding: 10px }
+  .overlay .big { font-size: 44px }
+}
 
 /* ---------- écrans bas (téléphone en paysage) ----------
    Tout tient dans la hauteur de l'écran : le clavier garde sa taille,
    la portée se contente de la place restante. */
 @media (max-height: 560px) {
-  body { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden }
   header { padding: 6px 16px; gap: 10px; flex-wrap: nowrap }
-  .brand { font-size: 18px }
+  .brand { font-size: 0; gap: 0 }
+  #clefSeg .t { display: none }
   .brand .glyph { font-size: 24px }
   .seg button { padding: 4px 12px; font-size: 13px }
   .icon-btn { width: 32px; height: 32px }

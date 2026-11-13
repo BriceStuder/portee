@@ -351,12 +351,24 @@ function harmony() {
   return held.length >= 2 ? { midis: held, held: true } : null;
 }
 
-// Largeur du cadre : sur un écran bas (téléphone en paysage), la portée a une hauteur imposée et on l'allonge pour
-// remplir la largeur ; une portée double, plus haute, s'élargit aussi sur grand écran pour ne pas pousser le clavier.
+// Hauteur disponible pour la portée : la zone centrale, moins le minuteur, le message et l'en-tête de la feuille.
+function svgRoom() {
+  const main = $('main'), cs = getComputedStyle(main), gap = parseFloat(cs.rowGap) || 0;
+  const others = [...main.children].filter(c => !c.classList.contains('sheet') && c.offsetParent);
+  return main.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - gap * others.length
+    - others.reduce((s, c) => s + c.offsetHeight, 0) - $('.sheet-head').offsetHeight - 2;
+}
+
+// Largeur du cadre de la portée. Une portée double, plus haute, s'élargit sur grand écran pour ne pas pousser le clavier.
+// S'il manque de la hauteur (téléphone en paysage, tablette), la portée garde la hauteur disponible et le cadre
+// s'allonge pour remplir la largeur : plus de notes visibles au lieu de bandes vides sur les côtés.
 function staffWidth(n) {
-  const w = staffSvg.clientWidth, h = staffSvg.clientHeight, H = systemHeight(n);
-  if (matchMedia('(max-height: 560px)').matches && h > 0) return Math.max(520, Math.round(w / h * H));
-  return n > 1 ? Math.min(916, Math.max(520, Math.round(w * 0.9))) : 520;
+  const w = staffSvg.clientWidth, H = systemHeight(n);
+  if (!w) return 520;
+  const base = n > 1 ? Math.min(916, Math.max(520, Math.round(w * 0.9))) : 520;
+  const room = svgRoom();
+  if (room > 40 && w * H / base > room) return Math.max(base, Math.round(w / room * H));
+  return base;
 }
 
 function renderFree(animate) {
@@ -691,9 +703,15 @@ $('#metreBtn').onclick = () => {
   const keys = Object.keys(METRES);
   setMetre(keys[(keys.indexOf(S.metre) + 1) % keys.length]);
 };
-// Rotation du téléphone : la partition se recalcule à la nouvelle largeur.
+// Rotation, fenêtre redimensionnée, clavier masqué : la partition se recalcule à la place disponible.
 let resizeT = 0;
-window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (free()) renderFree(false); }, 150); });
+new ResizeObserver(() => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => {
+    if (free()) renderFree(false);
+    else if (S.clef === 'both' && G.phase !== 'ended') drawGame(G.phase === 'playing' ? G.note : null);
+  }, 150);
+}).observe($('main'));
 $('#metroBtn').onclick = () => (METRO.on ? metroStop : metroStart)();
 // Tempo : − / + de 1 en 1. En maintenant appuyé, ça défile, puis passe de 5 en 5 après un moment.
 const TEMPO_MIN = 30, TEMPO_MAX = 240;
