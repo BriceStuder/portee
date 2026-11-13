@@ -2,7 +2,7 @@
 import { makeNote, fromMidi, noteName, enharmonic, isRare, noteRange, keyboardRange, LETTERS_FR, LETTERS_EN } from './theory.js';
 import { renderStaff, renderSequence, systemHeight } from './staff.js';
 import { Keyboard } from './keyboard.js';
-import { playNote, click, audioNow } from './audio.js';
+import { playNote, click, audioNow, audioLatency } from './audio.js';
 import { initMidi } from './midi.js';
 import { analyse } from './chords.js';
 import { load, save } from './store.js';
@@ -269,6 +269,7 @@ function resetVoices() {
 // Fin d'un élément : à son relâchement, ou à l'attaque suivante de la même voix si on le tient encore.
 function endEvent(e, now) {
   e.live = false;
+  if (e.session === METRO.session) e.qOff = qOf(now);
   if (S.durations) e.value = nearestValue(toBeats(now - e.t));
 }
 
@@ -283,6 +284,7 @@ function freeOn(m, vel = 0) {
       if (gap >= REST_MIN) v.seq.push({ rest: true, t: v.lastOff, value: nearestValue(Math.min(gap, 4)) });
     }
     cur = v.cur = { midis: [], t: now, value: S.durations ? VALUES[0] : null, vel: 0, live: true };
+    if (measured()) Object.assign(cur, { q: qOf(now), session: METRO.session });
     v.seq.push(cur);
     if (v.seq.length > SEQ_MAX) v.seq.splice(0, v.seq.length - SEQ_MAX);
     attack = true;
@@ -305,6 +307,11 @@ function growValue() {
     any = true;
     const val = liveValue(toBeats(now - c.t));
     if (val !== c.value) { c.value = val; changed = true; }
+  }
+  // Partition mesurée : la note tenue s'allonge à chaque double croche de la grille.
+  if (any && measured()) {
+    const k = Math.floor(qOf(now) / GRID);
+    if (k !== FREE.qk) { FREE.qk = k; changed = true; }
   }
   if (!any) { clearInterval(FREE.raf); FREE.raf = 0; }
   if (changed) renderFree(false);
@@ -391,6 +398,10 @@ function renderFree(animate) {
     // Noms d'accords courts au-dessus de la partition (une seule notation pour gagner de la place)
     const nota = S.notation === 'both' ? 'fr' : S.notation;
     const label = e => S.chords ? (a => a?.kind === 'chord' ? a.label : '')(analyse(attackedAt(e.t), nota, S.spell)) : '';
+    if (measured()) {
+      const { staves, bars } = measuredScore(order, label);
+      renderSequence(staffSvg, { staves, bars, width: staffWidth(n), group: 10 });
+    } else {
     // Comme sur une partition, la nuance n'est écrite que lorsqu'elle change.
     const staves = order.map(([clef, v]) => {
       let prev = '';
@@ -405,6 +416,7 @@ function renderFree(animate) {
       };
     });
     renderSequence(staffSvg, { staves, width: staffWidth(n), group: GROUP_MS });
+    }
   } else {
     const staves = order.map(([clef, v]) => ({ clef, notes: sounding(v), value: S.durations ? v.cur?.value : null, dyn: dynOf(v.cur?.vel)?.sym }));
     renderStaff(staffSvg, { staves, width: staffWidth(n), label: chord?.label, labelKind: chord?.kind, animate });
@@ -419,7 +431,7 @@ function renderFree(animate) {
 
 // ---------- métronome (mode libre) ----------
 // Programmation sur l'horloge audio, plus régulière que les minuteurs JavaScript.
-const METRO = { on: false, next: 0, beat: 0, timer: 0 };
+const METRO = { on: false, next: 0, beat: 0, timer: 0, origin: 0, session: 0 };
 // Mesures : n clics par mesure ; en 6/8 le métronome bat les croches (2 par noire), avec un appui sur la 4e.
 const METRES = {
   '2/4': { n: 2, sub: 1 },
@@ -429,6 +441,70 @@ const METRES = {
   '6/8': { n: 6, sub: 2, mid: 3 },
 };
 const metre = () => METRES[S.metre] || METRES['4/4'];
+
+// ---------- partition mesurée : notes calées sur le métronome ----------
+// Quand le métronome tourne (partition qui défile, durées affichées), chaque note est placée dans la grille des temps,
+// arrondie à la double croche, avec barres de mesure et liaisons pour les notes qui passent d'une mesure à l'autre.
+const GRID = 0.25; // double croche, en noires
+const measured = () => free() && METRO.on && S.scroll && S.durations;
+// Position (en noires depuis le départ du métronome) d'un instant de l'horloge de la page.
+const qOf = t => (t - METRO.origin) / 60000 * S.tempo;
+// Recale l'origine de la grille sur le prochain clic programmé (horloge audio → horloge de la page), en tenant compte
+// du retard de la sortie audio : on joue sur le clic qu'on entend. À refaire au départ et à chaque changement
+// de tempo ou de mesure ; entre-temps la grille avance avec l'horloge de la page, plus régulière que l'horloge audio.
+function metroResync() {
+  const heard = performance.now() + (METRO.next - audioNow() + audioLatency()) * 1000;
+  METRO.origin = heard - METRO.beat / metre().sub * 60000 / S.tempo;
+}
+const snap = q => Math.round(q / GRID) * GRID;
+
+// Découpe [a, b) en figures : coupée aux barres de mesure, chaque morceau décomposé en figures (de la plus longue).
+function split(a, b, bar) {
+  const out = [];
+  while (b - a > 1e-6) {
+    const segEnd = Math.min(b, (Math.floor(a / bar + 1e-6) + 1) * bar);
+    while (segEnd - a > 1e-6) {
+      const v = VALUES.filter(v => v.beats <= segEnd - a + 1e-6).pop() || VALUES[0];
+      out.push({ q: a, value: v });
+      a += v.beats;
+    }
+  }
+  return out;
+}
+
+function measuredScore(order, label) {
+  const M = metre(), bar = M.n / M.sub, now = performance.now();
+  const lists = order.map(([, v]) => v.seq.filter(e => !e.rest && e.session === METRO.session)
+    .map(e => ({ e, on: snap(e.q), off: snap(e.live || e.qOff == null ? qOf(now) : e.qOff) })));
+  const all = lists.flat();
+  if (!all.length) return { staves: order.map(([clef]) => ({ clef, events: [] })), bars: [] };
+  // La partition commence au début de la mesure de la première note, la même pour les deux mains.
+  const start = Math.floor(Math.min(...all.map(x => x.on)) / bar + 1e-6) * bar;
+  let end = start;
+  const staves = order.map(([clef], i) => {
+    const L = lists[i].sort((a, b) => a.on - b.on), events = [];
+    // Une voix joue une chose à la fois : une note s'arrête au plus tard quand la suivante commence.
+    L.forEach((x, k) => { if (k) x.on = Math.max(x.on, L[k - 1].on + GRID); });
+    L.forEach((x, k) => { if (k < L.length - 1) x.off = Math.min(x.off, L[k + 1].on); x.off = Math.max(x.off, x.on + GRID); });
+    let pos = start, prevDyn = '';
+    for (const x of L) {
+      for (const p of split(pos, x.on, bar)) events.push({ rest: true, t: p.q * 1000, value: p.value });
+      const d = dynOf(x.e.vel)?.sym || '', dyn = d !== prevDyn ? d : '';
+      if (d) prevDyn = d;
+      const ps = split(x.on, x.off, bar);
+      ps.forEach((p, j) => events.push({
+        t: p.q * 1000, notes: x.e.midis.map(m => fromMidi(m, S.spell)), value: p.value, live: x.e.live,
+        tie: j < ps.length - 1, label: j ? '' : label(x.e), dyn: j ? '' : dyn,
+      }));
+      pos = x.off;
+    }
+    end = Math.max(end, pos);
+    return { clef, events };
+  });
+  const bars = [];
+  for (let b = start + bar; b <= end + 1e-6; b += bar) bars.push(b * 1000);
+  return { staves, bars };
+}
 
 function metroSchedule() {
   while (METRO.next < audioNow() + 0.12) {
@@ -444,7 +520,9 @@ function metroStart() {
   if (METRO.on) return;
   METRO.on = true;
   METRO.beat = 0;
+  METRO.session++; // nouvelle prise : la partition mesurée repart de zéro
   METRO.next = audioNow() + 0.08;
+  metroResync();
   metroSchedule();
   METRO.timer = setInterval(metroSchedule, 25);
   renderMetro();
@@ -454,6 +532,7 @@ function metroStop() {
   METRO.on = false;
   clearInterval(METRO.timer);
   renderMetro();
+  if (free()) renderFree(false); // retour à la partition libre
 }
 function flashBeat(accent) {
   if (!METRO.on) return;
@@ -697,7 +776,10 @@ function setMetre(m) {
   S.metre = m;
   save('settings', S);
   METRO.beat = 0;
+  METRO.session++;
+  if (METRO.on) metroResync();
   renderMetro();
+  if (free()) renderFree(false);
 }
 $('#metreBtn').onclick = () => {
   const keys = Object.keys(METRES);
@@ -719,8 +801,10 @@ function stepTempo(dir, step = 1) {
   const base = step > 1 ? (dir > 0 ? Math.floor(S.tempo / step) * step : Math.ceil(S.tempo / step) * step) : S.tempo;
   const t = Math.min(TEMPO_MAX, Math.max(TEMPO_MIN, base + dir * step));
   if (t === S.tempo) return;
+  // La grille garde la position déjà jouée et repart au nouveau tempo depuis le prochain clic.
   S.tempo = t;
   save('settings', S);
+  if (METRO.on) metroResync();
   renderMetro();
 }
 for (const [id, dir] of [['#tempoDown', -1], ['#tempoUp', 1]]) {

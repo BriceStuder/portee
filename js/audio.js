@@ -43,6 +43,9 @@ export function playNote(midi) {
   }
 }
 
+// Retard entre le moment prévu d'un son et celui où on l'entend (tampon audio, sortie) : en secondes.
+export const audioLatency = () => ctx ? (ctx.outputLatency || 0) + (ctx.baseLatency || 0) : 0;
+
 export function audioNow() {
   init();
   if (ctx.state === 'suspended') ctx.resume();

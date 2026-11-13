@@ -134,6 +134,16 @@ function drawChord(parent, L, x) {
   parent.appendChild(g);
 }
 
+// Liaison de prolongation : un arc fin, côté opposé à la hampe, d'une tête de note à la suivante.
+function drawTies(parent, L, x1, x2) {
+  const a = x1 + 9, b = x2 - 9, m = (a + b) / 2, h = Math.min(11, 4 + (b - a) * 0.08);
+  for (const n of L.list) {
+    const dir = L.up ? 1 : -1, y = L.yOf(n) + dir * 7;
+    parent.appendChild(el('path', { class: 'tie',
+      d: `M${a} ${y}Q${m} ${y + dir * h} ${b} ${y}Q${m} ${y + dir * (h - 2.6)} ${a} ${y}Z` }));
+  }
+}
+
 function drawRest(parent, value, x) {
   const [glyph, y] = RESTS[value.type];
   const g = el('g', { class: 'rest' });
@@ -211,17 +221,21 @@ const drawDyn = (parent, x, y, sym) => parent.appendChild(el('text', { class: 'd
  * les éléments attaqués à moins de `group` ms d'écart (t, en ms) partagent la même colonne.
  * Une note longue d'une main reste ainsi sous les notes plus courtes de l'autre main.
  * width : largeur du cadre (plus large que d'habitude sur un écran en paysage, pour voir plus de notes).
+ * bars : instants (même unité que t) des barres de mesure. tie:true : liaison vers la note suivante de la même portée.
  */
-export function renderSequence(svg, { staves, width = VB_W, group = 90 }) {
+export function renderSequence(svg, { staves, width = VB_W, group = 90, bars = [] }) {
   const SEQ_RIGHT = width - 40;
   const all = [];
   staves.forEach((s, si) => s.events.forEach(e => all.push({ e, si, L: e.rest ? null : layout(e.notes, e.value, s.clef) })));
+  // Une barre de mesure passe avant les notes qui tombent au même instant.
+  for (const t of bars) all.push({ bar: true, e: { t: t - 0.5 } });
   all.sort((a, b) => a.e.t - b.e.t);
-  // Colonnes : un élément par portée au plus, attaqués ensemble.
+  // Colonnes : un élément par portée au plus, attaqués ensemble ; une barre de mesure a sa propre colonne.
   const cols = [];
   for (const it of all) {
     let c = cols[cols.length - 1];
-    if (!c || it.e.t - c.t > group || c.items.some(o => o.si === it.si)) cols.push(c = { t: it.e.t, items: [] });
+    if (it.bar) { cols.push({ t: it.e.t, bar: true, items: [] }); continue; }
+    if (!c || c.bar || it.e.t - c.t > group || c.items.some(o => o.si === it.si)) cols.push(c = { t: it.e.t, items: [] });
     c.items.push(it);
   }
   // Placement horizontal : chaque colonne prend la place de ses altérations, points, crochets et de son nom d'accord.
@@ -232,9 +246,10 @@ export function renderSequence(svg, { staves, width = VB_W, group = 90 }) {
       ...c.items.map(it => it.e.dyn ? [...it.e.dyn].length * 7 + 4 : 0)); // … et de la nuance
     const wl = Math.max(lw, ...c.items.map(it => it.L ? it.L.wl : 14));
     const wr = Math.max(lw, ...c.items.map(it => it.L ? it.L.wr : (it.e.value?.dot ? 24 : 14)));
-    if (i) x += prevR + GAP + wl;
-    prevR = wr;
+    if (i) x += prevR + GAP + (c.bar ? -6 : wl);
+    prevR = c.bar ? -6 : wr; // la barre se glisse dans l'espace entre deux colonnes
     c.x = x;
+    for (const it of c.items) it.x = x;
   });
   const last = cols[cols.length - 1];
   const offset = last ? Math.min(0, SEQ_RIGHT - last.x) : 0;
@@ -265,12 +280,24 @@ export function renderSequence(svg, { staves, width = VB_W, group = 90 }) {
   svg.appendChild(defs);
   const clip = el('g', { mask: 'url(#seqMask)' });
   const g = el('g', { class: 'seq-notes' });
+  // Liaisons : de chaque note à la même note de l'élément suivant de la portée.
+  const next = new Map();
+  staves.forEach((s, si) => {
+    const seq = cols.flatMap(c => c.items.filter(it => it.si === si));
+    seq.forEach((it, k) => { if (it.e.tie && seq[k + 1]?.L) next.set(it, seq[k + 1]); });
+  });
   for (const c of visible) {
-    for (const { e, L, si } of c.items) {
+    if (c.bar) {
+      g.appendChild(el('line', { class: 'bar', x1: c.x, x2: c.x, y1: TOP, y2: BOT + (n - 1) * GRAND_DY }));
+      continue;
+    }
+    for (const it of c.items) {
+      const { e, L, si } = it;
       const eg = inStaff(g, si).appendChild(el('g', { class: e.live ? 'live' : '' }));
       if (e.rest) drawRest(eg, e.value, c.x);
       else drawChord(eg, L, c.x);
       if (e.dyn) drawDyn(eg, c.x, dynY(L, si, n), e.dyn);
+      if (next.has(it)) drawTies(eg, L, c.x, next.get(it).x);
     }
     if (c.label) g.appendChild(el('text', { class: 'chord-label small', x: c.x, y: labelY, 'text-anchor': 'middle' }, c.label));
   }

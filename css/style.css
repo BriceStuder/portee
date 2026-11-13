@@ -107,6 +107,9 @@ main { display: flex; flex-direction: column; align-items: center; justify-conte
 .ledger { stroke: var(--line); stroke-width: 1.6 }
 .system { stroke: var(--line); stroke-width: 1.3 }
 .brace { fill: var(--ink) }
+.bar { stroke: var(--line); stroke-width: 1.3 }
+.tie { fill: var(--ink) }
+.seq .live .tie { fill: var(--accent) }
 .note .held, .acc.held { opacity: .32 }
 .dyn { font-family: "Noto Music"; fill: var(--ink) }
 .seq .live .dyn { fill: var(--accent) }
